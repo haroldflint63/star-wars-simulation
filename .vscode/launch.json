@@ -1,0 +1,85 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch Chrome",
+      "request": "launch",
+      "type": "chrome",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Run Simulation CLI",
+      "request": "launch",
+      "type": "dart",
+      "program": "bin/my_dart_project.dart"
+    },
+    {
+      "name": "Run Simulation Web (Chrome)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug",
+      "deviceId": "chrome"
+    },
+    {
+      "name": "Run Unit Tests",
+      "request": "launch",
+      "type": "dart",
+      "program": "test/main_test.dart"
+    },
+    {
+      "name": "Run Simulation CLI (Ollama Free)",
+      "request": "launch",
+      "type": "dart",
+      "program": "bin/my_dart_project.dart",
+      "env": {
+        "LLM_PROVIDER": "ollama",
+        "OLLAMA_MODEL": "llama3.2:3b",
+        "OLLAMA_BASE_URL": "http://localhost:11434"
+      }
+    }
+  ]
+}
