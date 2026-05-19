@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'dart:math' as math;
 
+import 'web_synth.dart';
+
 /// Star Wars sound effects manager
 ///
 /// Professional audio system with web compatibility
@@ -51,46 +53,27 @@ class StarWarsSounds {
     _musicPlayer.setVolume(_volume * 0.3);
   }
 
-  /// Play lightsaber ignition
+  /// Play lightsaber ignition — procedural (no network).
   static Future<void> lightsaberIgnite() async {
     if (!_soundEnabled) return;
-    try {
-      await _player.play(
-        UrlSource('https://cdn.freesound.org/previews/16/16067_8462-lq.mp3'),
-      );
-      debugPrint('🔊 Playing: Lightsaber Ignite');
-    } catch (e) {
-      // Silent fallback
+    if (kIsWeb) {
+      WebSynth.lightsaber();
     }
   }
 
-  /// Play lightsaber swing
+  /// Play lightsaber swing — procedural (no network).
   static Future<void> lightsaberSwing() async {
     if (!_soundEnabled) return;
-    try {
-      await _player.play(
-        UrlSource(
-          'https://cdn.freesound.org/previews/146/146095_2615119-lq.mp3',
-        ),
-      );
-      debugPrint('🔊 Playing: Lightsaber Swing');
-    } catch (e) {
-      // Silent fallback
+    if (kIsWeb) {
+      WebSynth.lightsaber();
     }
   }
 
-  /// Play blaster fire
+  /// Play blaster fire — procedural Web Audio (no network).
   static Future<void> blasterFire() async {
     if (!_soundEnabled) return;
-    try {
-      await _player.play(
-        UrlSource(
-          'https://cdn.freesound.org/previews/156/156031_2703579-lq.mp3',
-        ),
-      );
-      debugPrint('🔊 Playing: Blaster Fire');
-    } catch (e) {
-      // Silent fallback
+    if (kIsWeb) {
+      WebSynth.blaster();
     }
   }
 
@@ -138,19 +121,11 @@ class StarWarsSounds {
     }
   }
 
-  /// Play ambient space sound
+  /// Play ambient space sound — procedural drone (no network).
   static Future<void> playAmbientSpace() async {
     if (!_soundEnabled) return;
-    try {
-      _ambientPlayer.setVolume(_volume * 0.2);
-      await _ambientPlayer.play(
-        UrlSource(
-          'https://cdn.freesound.org/previews/270/270341_5123851-lq.mp3',
-        ),
-      );
-      debugPrint('🔊 Playing: Ambient Space');
-    } catch (e) {
-      // Silent fallback
+    if (kIsWeb) {
+      WebSynth.startSpaceDrone();
     }
   }
 
@@ -220,18 +195,11 @@ class StarWarsSounds {
     }
   }
 
-  /// Play explosion
+  /// Play explosion — procedural noise burst (no network).
   static Future<void> explosion() async {
     if (!_soundEnabled) return;
-    try {
-      await _player.play(
-        UrlSource(
-          'https://cdn.freesound.org/previews/235/235968_4172965-lq.mp3',
-        ),
-      );
-      debugPrint('🔊 Playing: Explosion');
-    } catch (e) {
-      // Silent fallback
+    if (kIsWeb) {
+      WebSynth.explosion();
     }
   }
 
