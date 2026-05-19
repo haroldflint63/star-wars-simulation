@@ -49,7 +49,7 @@ class CohereClient {
             },
             body: body,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 20));
       if (res.statusCode >= 400) {
         debugPrint('Cohere ${res.statusCode}: ${res.body}');
         return _fallback();
@@ -111,7 +111,7 @@ class CohereClient {
             },
             body: body,
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 25));
 
       if (res.statusCode >= 400) {
         debugPrint('Cohere agentTurn ${res.statusCode}: ${res.body}');
