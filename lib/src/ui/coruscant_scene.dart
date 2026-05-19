@@ -508,16 +508,8 @@ class _World {
         accentColor: const Color(0xFFFF5C7A),
         hasSaber: false,
       ),
-      // VADER — Empire, red saber, no persona (cycles canned actions)
-      _Walker(
-        name: 'VADER',
-        faction: 'Empire',
-        x: w * 0.84, y: gy, dir: -1,
-        speed: 18, scale: 1.05,
-        bodyColor: const Color(0xFF0A0A0A),
-        accentColor: const Color(0xFFFF3158),
-        hasSaber: true,
-      ),
+      // VADER is rendered as a giant cinematic boss in the foreground
+      // (see _drawHeroVader); not included as a small walker.
     ]);
 
     // Sky dogfight — 4 X-wings vs 4 TIEs at high altitude.
@@ -2396,6 +2388,7 @@ class _BoganoPainter extends CustomPainter {
     _drawFalcon(canvas, size);
     _drawGround(canvas, size);
     _drawWalkers(canvas);
+    _drawHeroVader(canvas, size);
     _drawBolts(canvas);
     _drawVignette(canvas, size);
     _drawFilmGrain(canvas, size);
@@ -3765,6 +3758,500 @@ class _BoganoPainter extends CustomPainter {
         ..close();
       _p.color = Colors.black.withValues(alpha: 0.75);
       canvas.drawPath(tail, _p);
+    }
+  }
+
+  /// Towering cinematic Darth Vader in the foreground — the boss of the scene.
+  /// Detailed iconic helmet, glowing red lightsaber, billowing cape,
+  /// breathing chest LEDs, red ground halo.
+  void _drawHeroVader(Canvas canvas, Size size) {
+    final t = world.t;
+    // Anchor: bottom-right foreground, standing on plaza.
+    final feetY = size.height * 0.965;
+    final cx = size.width * 0.78;
+    // Total height ~58% of screen.
+    final H = size.height * 0.58;
+    final headR = H * 0.085;
+    final headY = feetY - H + headR;
+    final shoulderY = headY + headR * 1.6;
+    final hipY = feetY - H * 0.45;
+
+    // ---- Red ground halo / saber spill on the floor ----
+    _glow
+      ..shader = RadialGradient(
+        colors: [
+          const Color(0xFFFF1830).withValues(alpha: 0.55),
+          const Color(0xFFFF1830).withValues(alpha: 0.0),
+        ],
+      ).createShader(Rect.fromCircle(center: Offset(cx, feetY + 6), radius: H * 0.55))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(Offset(cx, feetY + 6), H * 0.55, _glow);
+    _glow
+      ..shader = null
+      ..blendMode = BlendMode.srcOver;
+
+    // ---- Billowing cape behind body ----
+    final capeSway = sin(t * 0.9) * H * 0.06;
+    final capeSway2 = sin(t * 1.3 + 1.2) * H * 0.04;
+    final capePaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const [Color(0xFF0A0A0E), Color(0xFF02020A)],
+      ).createShader(Rect.fromLTWH(cx - H * 0.32, shoulderY, H * 0.64, feetY - shoulderY))
+      ..style = PaintingStyle.fill;
+    final cape = Path()
+      ..moveTo(cx - headR * 1.6, shoulderY)
+      ..cubicTo(
+        cx - H * 0.30 + capeSway, hipY,
+        cx - H * 0.34 - capeSway2, feetY - H * 0.08,
+        cx - H * 0.22 + capeSway, feetY + 4,
+      )
+      ..lineTo(cx + H * 0.22 + capeSway2, feetY + 4)
+      ..cubicTo(
+        cx + H * 0.34 + capeSway, feetY - H * 0.08,
+        cx + H * 0.30 - capeSway2, hipY,
+        cx + headR * 1.6, shoulderY,
+      )
+      ..close();
+    canvas.drawPath(cape, capePaint);
+    // Cape rim light (red spill from saber)
+    _p
+      ..shader = null
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..color = const Color(0xFFFF2A4A).withValues(alpha: 0.35);
+    canvas.drawPath(cape, _p);
+
+    // ---- Body / torso silhouette ----
+    final bodyPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const [Color(0xFF14141A), Color(0xFF050507)],
+      ).createShader(Rect.fromLTWH(cx - H * 0.18, shoulderY, H * 0.36, feetY - shoulderY));
+    // Shoulders (trapezoidal)
+    final shoulders = Path()
+      ..moveTo(cx - H * 0.20, shoulderY + H * 0.02)
+      ..lineTo(cx + H * 0.20, shoulderY + H * 0.02)
+      ..lineTo(cx + H * 0.15, shoulderY + H * 0.12)
+      ..lineTo(cx - H * 0.15, shoulderY + H * 0.12)
+      ..close();
+    canvas.drawPath(shoulders, bodyPaint);
+    // Torso
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(cx - H * 0.13, shoulderY + H * 0.10, cx + H * 0.13, hipY + H * 0.02),
+        Radius.circular(H * 0.02),
+      ),
+      bodyPaint,
+    );
+    // Belt
+    _p
+      ..shader = null
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFF1F1612);
+    canvas.drawRect(
+      Rect.fromLTWH(cx - H * 0.14, hipY - H * 0.005, H * 0.28, H * 0.025),
+      _p,
+    );
+    // Belt buckles (silver squares)
+    _p.color = const Color(0xFF8A8E96);
+    for (var i = -2; i <= 2; i++) {
+      canvas.drawRect(
+        Rect.fromCenter(
+          center: Offset(cx + i * H * 0.045, hipY + H * 0.006),
+          width: H * 0.018, height: H * 0.018,
+        ),
+        _p,
+      );
+    }
+    // Legs
+    _p.color = const Color(0xFF06060A);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(cx - H * 0.085, hipY + H * 0.02, cx - H * 0.005, feetY),
+        Radius.circular(H * 0.015),
+      ),
+      _p,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(cx + H * 0.005, hipY + H * 0.02, cx + H * 0.085, feetY),
+        Radius.circular(H * 0.015),
+      ),
+      _p,
+    );
+    // Boots
+    _p.color = const Color(0xFF030305);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(cx - H * 0.10, feetY - H * 0.025, H * 0.105, H * 0.025),
+        Radius.circular(H * 0.008),
+      ),
+      _p,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(cx - H * 0.005, feetY - H * 0.025, H * 0.105, H * 0.025),
+        Radius.circular(H * 0.008),
+      ),
+      _p,
+    );
+
+    // ---- Chest control box with pulsing LEDs ----
+    final boxL = cx - H * 0.085;
+    final boxT = shoulderY + H * 0.14;
+    final boxW = H * 0.17;
+    final boxH = H * 0.075;
+    _p
+      ..shader = null
+      ..color = const Color(0xFF1A1A20);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(boxL, boxT, boxW, boxH),
+        Radius.circular(H * 0.008),
+      ),
+      _p,
+    );
+    // Outline
+    _p
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = const Color(0xFF40444A);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(boxL, boxT, boxW, boxH),
+        Radius.circular(H * 0.008),
+      ),
+      _p,
+    );
+    _p.style = PaintingStyle.fill;
+    // LED grid — top row red, bottom row green/cyan, breathing pulse.
+    final breath = 0.5 + 0.5 * sin(t * 1.4); // slow vader breathing
+    for (var i = 0; i < 4; i++) {
+      final lx = boxL + boxW * (0.18 + i * 0.21);
+      _p.color = Color.lerp(
+        const Color(0xFF8A0E22), const Color(0xFFFF3A5A), breath,
+      )!;
+      canvas.drawCircle(Offset(lx, boxT + boxH * 0.30), H * 0.011, _p);
+      // glow
+      _glow
+        ..shader = RadialGradient(colors: [
+          const Color(0xFFFF3A5A).withValues(alpha: 0.6 * breath),
+          const Color(0xFFFF3A5A).withValues(alpha: 0.0),
+        ]).createShader(Rect.fromCircle(
+            center: Offset(lx, boxT + boxH * 0.30), radius: H * 0.04))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(lx, boxT + boxH * 0.30), H * 0.04, _glow);
+    }
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+    for (var i = 0; i < 6; i++) {
+      final lx = boxL + boxW * (0.10 + i * 0.16);
+      final flick = ((t * (2 + i * 0.3)).floor() + i) % 3;
+      _p.color = flick == 0
+          ? const Color(0xFF26F0F0)
+          : flick == 1 ? const Color(0xFF8AE0A8) : const Color(0xFF202830);
+      canvas.drawRect(
+        Rect.fromCenter(
+          center: Offset(lx, boxT + boxH * 0.70),
+          width: H * 0.014, height: H * 0.012,
+        ),
+        _p,
+      );
+    }
+    // Silver round dial knobs left/right of chest box
+    for (final dx in [-1.0, 1.0]) {
+      _p.color = const Color(0xFF6E7278);
+      canvas.drawCircle(
+        Offset(cx + dx * H * 0.115, boxT + boxH * 0.45),
+        H * 0.018,
+        _p,
+      );
+      _p.color = const Color(0xFF15191D);
+      canvas.drawCircle(
+        Offset(cx + dx * H * 0.115, boxT + boxH * 0.45),
+        H * 0.010,
+        _p,
+      );
+    }
+
+    // ---- Arms (one hand on saber hilt, raised) ----
+    _p
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = H * 0.05
+      ..color = const Color(0xFF050507);
+    // Left arm down
+    canvas.drawLine(
+      Offset(cx - H * 0.17, shoulderY + H * 0.08),
+      Offset(cx - H * 0.20, hipY + H * 0.02),
+      _p,
+    );
+    // Right arm raised gripping saber
+    final saberHiltX = cx + H * 0.30;
+    final saberHiltY = shoulderY + H * 0.02;
+    canvas.drawLine(
+      Offset(cx + H * 0.17, shoulderY + H * 0.08),
+      Offset(saberHiltX, saberHiltY),
+      _p,
+    );
+
+    // ---- Lightsaber: silver hilt + glowing red blade ----
+    // Hilt
+    _p
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFF1A1A1E);
+    final hiltLen = H * 0.07;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(saberHiltX - hiltLen * 0.5, saberHiltY - H * 0.012,
+            hiltLen, H * 0.024),
+        Radius.circular(H * 0.004),
+      ),
+      _p,
+    );
+    // Silver bands
+    _p.color = const Color(0xFFB8BCC2);
+    for (var i = 0; i < 3; i++) {
+      canvas.drawRect(
+        Rect.fromLTWH(
+          saberHiltX - hiltLen * 0.5 + hiltLen * (0.15 + i * 0.25),
+          saberHiltY - H * 0.013,
+          hiltLen * 0.06,
+          H * 0.026,
+        ),
+        _p,
+      );
+    }
+    // Blade — angled upward to the right
+    final bladeStart = Offset(saberHiltX + hiltLen * 0.5, saberHiltY);
+    final bladeEnd = Offset(saberHiltX + H * 0.34, saberHiltY - H * 0.36);
+    final bladeMid = Offset(
+      (bladeStart.dx + bladeEnd.dx) / 2,
+      (bladeStart.dy + bladeEnd.dy) / 2,
+    );
+    final bladeLen = (bladeEnd - bladeStart).distance;
+    // Outer glow
+    _glow
+      ..shader = RadialGradient(colors: [
+        const Color(0xFFFF1A30).withValues(alpha: 0.75),
+        const Color(0xFFFF1A30).withValues(alpha: 0.0),
+      ]).createShader(Rect.fromCircle(center: bladeMid, radius: bladeLen * 0.75))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(bladeMid, bladeLen * 0.75, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+    // Outer blade (wide red)
+    _p
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = H * 0.038
+      ..color = const Color(0xFFFF2238).withValues(alpha: 0.55);
+    canvas.drawLine(bladeStart, bladeEnd, _p);
+    // Mid blade
+    _p
+      ..strokeWidth = H * 0.024
+      ..color = const Color(0xFFFF4458);
+    canvas.drawLine(bladeStart, bladeEnd, _p);
+    // White-hot core
+    _p
+      ..strokeWidth = H * 0.012
+      ..color = const Color(0xFFFFE6E6);
+    canvas.drawLine(bladeStart, bladeEnd, _p);
+
+    // ---- Helmet (the iconic part) ----
+    final helmetCenter = Offset(cx, headY);
+    // Cape shoulder mantle behind helmet
+    _p
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFF050508);
+    final mantle = Path()
+      ..moveTo(cx - headR * 1.4, headY + headR * 0.6)
+      ..quadraticBezierTo(cx, headY + headR * 1.2, cx + headR * 1.4, headY + headR * 0.6)
+      ..lineTo(cx + headR * 1.9, shoulderY + headR * 0.4)
+      ..lineTo(cx - headR * 1.9, shoulderY + headR * 0.4)
+      ..close();
+    canvas.drawPath(mantle, _p);
+
+    // Helmet base — slightly tall ovoid
+    final helmetRect = Rect.fromCenter(
+      center: helmetCenter,
+      width: headR * 2.05,
+      height: headR * 2.45,
+    );
+    final helmetPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.3, -0.6),
+        radius: 1.1,
+        colors: const [Color(0xFF22222A), Color(0xFF020204)],
+      ).createShader(helmetRect);
+    canvas.drawOval(helmetRect, helmetPaint);
+    // Helmet outline
+    _p
+      ..shader = null
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = const Color(0xFF000000);
+    canvas.drawOval(helmetRect, _p);
+    _p.style = PaintingStyle.fill;
+
+    // Brow ridge (darker arc across upper helmet)
+    _p.color = const Color(0xFF000000).withValues(alpha: 0.6);
+    canvas.drawArc(
+      Rect.fromCenter(
+        center: Offset(cx, headY - headR * 0.05),
+        width: headR * 1.85,
+        height: headR * 1.0,
+      ),
+      pi, pi, false, _p,
+    );
+
+    // Eye lenses — angled, glossy black with red inner glow
+    for (final side in [-1.0, 1.0]) {
+      final eyeCenter = Offset(cx + side * headR * 0.42, headY - headR * 0.1);
+      // Lens outer (gloss black)
+      _p
+        ..style = PaintingStyle.fill
+        ..color = const Color(0xFF050508);
+      canvas.save();
+      canvas.translate(eyeCenter.dx, eyeCenter.dy);
+      canvas.rotate(side * -0.22);
+      final lensRect = Rect.fromCenter(
+        center: Offset.zero,
+        width: headR * 0.55,
+        height: headR * 0.32,
+      );
+      canvas.drawOval(lensRect, _p);
+      // Inner red ember glow
+      _glow
+        ..shader = RadialGradient(colors: [
+          const Color(0xFFFF2A4A).withValues(alpha: 0.75 + 0.2 * breath),
+          const Color(0xFFFF2A4A).withValues(alpha: 0.0),
+        ]).createShader(lensRect)
+        ..blendMode = BlendMode.plus;
+      canvas.drawOval(lensRect, _glow);
+      _glow..shader = null..blendMode = BlendMode.srcOver;
+      // Bright reflection highlight
+      _p.color = const Color(0xFFFF8090).withValues(alpha: 0.7);
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset(-headR * 0.06, -headR * 0.05),
+          width: headR * 0.18,
+          height: headR * 0.06,
+        ),
+        _p,
+      );
+      canvas.restore();
+    }
+
+    // Vocoder / mouth grille — triangular plate under nose
+    _p
+      ..color = const Color(0xFF15151A);
+    final mouthPath = Path()
+      ..moveTo(cx - headR * 0.45, headY + headR * 0.30)
+      ..lineTo(cx + headR * 0.45, headY + headR * 0.30)
+      ..lineTo(cx + headR * 0.32, headY + headR * 0.85)
+      ..lineTo(cx - headR * 0.32, headY + headR * 0.85)
+      ..close();
+    canvas.drawPath(mouthPath, _p);
+    // Grille bars
+    _p
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..color = const Color(0xFF45474C);
+    for (var i = 0; i < 5; i++) {
+      final fy = headY + headR * (0.40 + i * 0.10);
+      final fw = headR * (0.42 - i * 0.025);
+      canvas.drawLine(Offset(cx - fw, fy), Offset(cx + fw, fy), _p);
+    }
+    _p.style = PaintingStyle.fill;
+
+    // Nose triangular ridge — vertical plate between eyes
+    _p.color = const Color(0xFF08080C);
+    final nose = Path()
+      ..moveTo(cx, headY - headR * 0.35)
+      ..lineTo(cx - headR * 0.12, headY + headR * 0.30)
+      ..lineTo(cx + headR * 0.12, headY + headR * 0.30)
+      ..close();
+    canvas.drawPath(nose, _p);
+
+    // Cheek vents (the iconic side circles)
+    _p.color = const Color(0xFF1A1A1F);
+    canvas.drawCircle(
+      Offset(cx - headR * 0.85, headY + headR * 0.45),
+      headR * 0.16,
+      _p,
+    );
+    canvas.drawCircle(
+      Offset(cx + headR * 0.85, headY + headR * 0.45),
+      headR * 0.16,
+      _p,
+    );
+    _p
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..color = const Color(0xFF000000);
+    canvas.drawCircle(
+      Offset(cx - headR * 0.85, headY + headR * 0.45),
+      headR * 0.16,
+      _p,
+    );
+    canvas.drawCircle(
+      Offset(cx + headR * 0.85, headY + headR * 0.45),
+      headR * 0.16,
+      _p,
+    );
+    _p.style = PaintingStyle.fill;
+
+    // Forehead seam (vertical line down center top)
+    _p
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..color = const Color(0xFF000000).withValues(alpha: 0.6);
+    canvas.drawLine(
+      Offset(cx, headY - headR * 1.10),
+      Offset(cx, headY - headR * 0.30),
+      _p,
+    );
+    // Helmet base seam (under chin curve)
+    canvas.drawArc(
+      Rect.fromCenter(
+        center: Offset(cx, headY + headR * 0.20),
+        width: headR * 1.7,
+        height: headR * 1.6,
+      ),
+      pi * 0.15, pi * 0.7, false, _p,
+    );
+    _p.style = PaintingStyle.fill;
+
+    // Top-of-helmet highlight (specular)
+    _p.color = const Color(0xFF3A3A44).withValues(alpha: 0.6);
+    canvas.drawArc(
+      Rect.fromCenter(
+        center: helmetCenter,
+        width: headR * 1.6,
+        height: headR * 1.9,
+      ),
+      pi * 1.15, pi * 0.35, false,
+      _p..strokeWidth = 2.0..style = PaintingStyle.stroke,
+    );
+    _p.style = PaintingStyle.fill;
+
+    // Faint breath rasp halo around mouth (subtle white mist)
+    if (breath > 0.7) {
+      _glow
+        ..shader = RadialGradient(colors: [
+          Colors.white.withValues(alpha: 0.10 * (breath - 0.7) / 0.3),
+          Colors.white.withValues(alpha: 0.0),
+        ]).createShader(Rect.fromCircle(
+            center: Offset(cx, headY + headR * 0.65), radius: headR * 0.8))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(
+        Offset(cx, headY + headR * 0.65),
+        headR * 0.8,
+        _glow,
+      );
+      _glow..shader = null..blendMode = BlendMode.srcOver;
     }
   }
 
