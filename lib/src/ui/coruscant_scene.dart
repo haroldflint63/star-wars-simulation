@@ -370,6 +370,8 @@ class _CoruscantSceneState extends State<CoruscantScene>
                 child: RepaintBoundary(
                   child: CustomPaint(
                     painter: _BoganoPainter(_world),
+                    size: Size(c.maxWidth, c.maxHeight),
+                    child: const SizedBox.expand(),
                   ),
                 ),
               ),
