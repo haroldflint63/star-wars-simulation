@@ -64,6 +64,182 @@ class CohereClient {
     }
   }
 
+  // ===== Autonomous agent turn =======================================
+
+  /// Asks Cohere to roleplay one turn for an in-universe agent and returns
+  /// a parsed [AgentTurn]. Falls back to a deterministic canned turn on any
+  /// error, timeout, or missing key.
+  Future<AgentTurn> agentTurn({
+    required String agentName,
+    required String faction,
+    required String traits,
+    required String longTermGoal,
+    required String currentLocation,
+    required List<String> nearbyCharacters,
+    required String worldStateContext,
+    List<String> retrievedMemories = const [],
+  }) async {
+    final prompt = _buildAgentPrompt(
+      agentName: agentName,
+      faction: faction,
+      traits: traits,
+      longTermGoal: longTermGoal,
+      currentLocation: currentLocation,
+      nearbyCharacters: nearbyCharacters,
+      worldStateContext: worldStateContext,
+      retrievedMemories: retrievedMemories,
+    );
+
+    if (!hasKey) {
+      return _fallbackTurn(agentName, nearbyCharacters);
+    }
+
+    try {
+      final body = jsonEncode({
+        'model': _model,
+        'message': prompt,
+        'temperature': 0.85,
+        'max_tokens': 500,
+        'response_format': {'type': 'json_object'},
+      });
+      final res = await http
+          .post(
+            Uri.parse(_endpoint),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: body,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (res.statusCode >= 400) {
+        debugPrint('Cohere agentTurn ${res.statusCode}: ${res.body}');
+        return _fallbackTurn(agentName, nearbyCharacters);
+      }
+      final outer = jsonDecode(res.body) as Map<String, dynamic>;
+      final raw = (outer['text'] as String?)?.trim() ?? '';
+      final cleaned = _stripCodeFences(raw);
+      final parsed = jsonDecode(cleaned) as Map<String, dynamic>;
+      return AgentTurn.fromJson(parsed, fallbackAgent: agentName);
+    } catch (e) {
+      debugPrint('Cohere agentTurn error: $e');
+      return _fallbackTurn(agentName, nearbyCharacters);
+    }
+  }
+
+  String _buildAgentPrompt({
+    required String agentName,
+    required String faction,
+    required String traits,
+    required String longTermGoal,
+    required String currentLocation,
+    required List<String> nearbyCharacters,
+    required String worldStateContext,
+    required List<String> retrievedMemories,
+  }) {
+    final nearby = nearbyCharacters.isEmpty ? 'None' : nearbyCharacters.join(', ');
+    final memories = retrievedMemories.isEmpty
+        ? '- (no prior memories retrieved)'
+        : retrievedMemories.map((m) => '- $m').join('\n');
+    return '''
+You are the engine driving a highly autonomous agent in a Star Wars social simulation.
+Your goal is to stay perfectly in character, manage your relationships, and take actions that align with your faction, morals, and long-term objectives.
+
+### 1. YOUR IDENTITY & PERSONA
+Name: $agentName
+Faction: $faction
+Core Traits: $traits
+Current Long-Term Goal: $longTermGoal
+
+### 2. THE CURRENT ENVIRONMENT
+Current Location: $currentLocation
+Nearby Entities/Characters: $nearby
+Active Local Event: $worldStateContext
+
+### 3. RELEVANT MEMORIES
+$memories
+
+### 4. SIMULATION INSTRUCTIONS
+- Prioritize your survival and your Core Traits.
+- Stay in character. Use Star Wars terminology only ("Credits", "Datapad", "Blast it", "By the Moons of Yavin"). No modern slang.
+- Analyze the stimulus, cross-reference memories, and decide your social + physical move for THIS turn only.
+
+### 5. OUTPUT FORMAT
+Respond ONLY with a single JSON object matching this schema. No prose, no code fences, no commentary.
+
+{
+  "inner_monologue": "string",
+  "social_action": {
+    "target": "string (a nearby character name, or 'All', or 'None')",
+    "dialogue": "string"
+  },
+  "physical_action": {
+    "type": "IDLE | MOVE | ATTACK | TRADE | USE_ITEM",
+    "details": "string"
+  },
+  "relationship_updates": [
+    { "character": "string", "trust_delta": -5, "reason": "string" }
+  ]
+}
+''';
+  }
+
+  String _stripCodeFences(String s) {
+    var t = s.trim();
+    if (t.startsWith('```')) {
+      final firstNl = t.indexOf('\n');
+      if (firstNl != -1) t = t.substring(firstNl + 1);
+      if (t.endsWith('```')) t = t.substring(0, t.length - 3);
+    }
+    return t.trim();
+  }
+
+  AgentTurn _fallbackTurn(String agentName, List<String> nearby) {
+    final target = nearby.isEmpty ? 'None' : nearby[_rand.nextInt(nearby.length)];
+    final pool = [
+      AgentTurn(
+        agentName: agentName,
+        innerMonologue:
+            'These corridors smell of Senate perfume and bantha credits. Stay alert — the wrong glance pays a bounty.',
+        socialTarget: target,
+        dialogue: 'Keep your visor down, friend. The CSF have eyes on lane 41 tonight.',
+        physicalActionType: 'MOVE',
+        physicalActionDetails: 'Drift toward the shadowed booth by the cantina viewport.',
+        relationshipUpdates: [
+          RelationshipUpdate(character: target, trustDelta: -1, reason: 'Cautious of unknown affiliation.'),
+        ],
+      ),
+      AgentTurn(
+        agentName: agentName,
+        innerMonologue:
+            'By the Moons of Yavin — that\'s an Imperial cipher on their datapad. I should slice it before they notice.',
+        socialTarget: target,
+        dialogue: 'Care for a hand of sabacc? Wagers settle disputes faster than blasters.',
+        physicalActionType: 'USE_ITEM',
+        physicalActionDetails: 'Palm a code-spike and ready it under the table.',
+        relationshipUpdates: [
+          RelationshipUpdate(character: target, trustDelta: 2, reason: 'Polite engagement bought reconnaissance time.'),
+        ],
+      ),
+      AgentTurn(
+        agentName: agentName,
+        innerMonologue:
+            'Two hundred credits left, no rent paid. The Hutts will skin me if I miss another tribute.',
+        socialTarget: target,
+        dialogue: 'Fifty credits says my speeder reaches Platform 17 before yours. Blast it, double or nothing.',
+        physicalActionType: 'TRADE',
+        physicalActionDetails: 'Slide a chit of 50 credits across the durasteel counter.',
+        relationshipUpdates: [
+          RelationshipUpdate(character: target, trustDelta: 1, reason: 'Shared wager — small trust earned.'),
+        ],
+      ),
+    ];
+    return pool[_rand.nextInt(pool.length)];
+  }
+
+  // ===== News fallback ===============================================
+
   String _fallback() => _canned[_rand.nextInt(_canned.length)];
 
   static const _canned = <String>[
@@ -78,4 +254,66 @@ class CohereClient {
     'Market alert: Czerka Corp shares up 4.2% on rumored Outer Rim contract.',
     'CSF advises avoiding the Manarai Mountains skyway during senate adjournment.',
   ];
+}
+
+// =====================================================================
+// AGENT TURN MODEL
+// =====================================================================
+
+class AgentTurn {
+  AgentTurn({
+    required this.agentName,
+    required this.innerMonologue,
+    required this.socialTarget,
+    required this.dialogue,
+    required this.physicalActionType,
+    required this.physicalActionDetails,
+    required this.relationshipUpdates,
+  });
+
+  final String agentName;
+  final String innerMonologue;
+  final String socialTarget;
+  final String dialogue;
+  final String physicalActionType;
+  final String physicalActionDetails;
+  final List<RelationshipUpdate> relationshipUpdates;
+
+  factory AgentTurn.fromJson(Map<String, dynamic> json, {required String fallbackAgent}) {
+    final social = (json['social_action'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final phys = (json['physical_action'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final updates = (json['relationship_updates'] as List?) ?? const [];
+    return AgentTurn(
+      agentName: fallbackAgent,
+      innerMonologue: (json['inner_monologue'] as String?)?.trim() ?? '',
+      socialTarget: (social['target'] as String?)?.trim() ?? 'None',
+      dialogue: (social['dialogue'] as String?)?.trim() ?? '',
+      physicalActionType: (phys['type'] as String?)?.trim() ?? 'IDLE',
+      physicalActionDetails: (phys['details'] as String?)?.trim() ?? '',
+      relationshipUpdates: updates
+          .whereType<Map>()
+          .map((e) => RelationshipUpdate.fromJson(e.cast<String, dynamic>()))
+          .toList(growable: false),
+    );
+  }
+}
+
+class RelationshipUpdate {
+  RelationshipUpdate({
+    required this.character,
+    required this.trustDelta,
+    required this.reason,
+  });
+
+  final String character;
+  final int trustDelta;
+  final String reason;
+
+  factory RelationshipUpdate.fromJson(Map<String, dynamic> json) {
+    return RelationshipUpdate(
+      character: (json['character'] as String?)?.trim() ?? '',
+      trustDelta: (json['trust_delta'] as num?)?.round() ?? 0,
+      reason: (json['reason'] as String?)?.trim() ?? '',
+    );
+  }
 }

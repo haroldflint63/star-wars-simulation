@@ -41,12 +41,42 @@ class _CoruscantSceneState extends State<CoruscantScene>
   Timer? _newsTimer;
   bool _liveAi = false;
 
+  // Autonomous agents (visible NPC theater)
+  static const List<_AgentPersona> _personas = [
+    _AgentPersona(
+      name: 'Vex Rashar',
+      faction: 'Bounty Hunters Guild',
+      traits: 'Cunning, desperate for credits, fiercely loyal to old crewmates',
+      goal: 'Collect the bounty on Senator Orlan without alerting CSF.',
+      color: Color(0xFFFFB347),
+    ),
+    _AgentPersona(
+      name: 'Kael Veronn',
+      faction: 'Rebel Alliance',
+      traits: 'Idealistic, sharp tactician, distrusts authority',
+      goal: 'Smuggle intel cylinders off Coruscant on the next freighter.',
+      color: Color(0xFF26F0F0),
+    ),
+    _AgentPersona(
+      name: 'ISB Agent Talos',
+      faction: 'Galactic Empire',
+      traits: 'Cold, methodical, devoted to Imperial order',
+      goal: 'Identify and arrest the Rebel cell operating in CoCo Town.',
+      color: Color(0xFFFF5C7A),
+    ),
+  ];
+  final Map<String, AgentTurn?> _agentTurns = {};
+  final Map<String, bool> _agentBusy = {};
+  Timer? _agentTimer;
+  int _agentRotor = 0;
+
   @override
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick)..start();
     _liveAi = _cohere.hasKey;
     _scheduleNews();
+    _scheduleAgents();
   }
 
   void _scheduleNews() {
@@ -62,6 +92,40 @@ class _CoruscantSceneState extends State<CoruscantScene>
       _bulletins.add(next);
       if (_bulletins.length > 12) _bulletins.removeAt(0);
       _tickerIdx = _bulletins.length - 1;
+    });
+  }
+
+  void _scheduleAgents() {
+    // Stagger one agent every 8s so requests don't bunch.
+    Timer.run(_tickOneAgent);
+    _agentTimer = Timer.periodic(const Duration(seconds: 8), (_) => _tickOneAgent());
+  }
+
+  Future<void> _tickOneAgent() async {
+    final p = _personas[_agentRotor % _personas.length];
+    _agentRotor++;
+    if (_agentBusy[p.name] == true) return;
+    _agentBusy[p.name] = true;
+    final nearby = _personas.where((o) => o.name != p.name).map((o) => o.name).toList();
+    final event = _bulletins.isEmpty ? 'A quiet moment in the upper levels.' : _bulletins.last;
+    final memories = <String>[
+      'You last saw ${nearby.first} arguing with a Czerka rep about credits.',
+      if (nearby.length > 1) 'You owe ${nearby[1]} a favor from the Battle of Scarif.',
+    ];
+    final turn = await _cohere.agentTurn(
+      agentName: p.name,
+      faction: p.faction,
+      traits: p.traits,
+      longTermGoal: p.goal,
+      currentLocation: 'Outlander Club, Uscru District, Coruscant',
+      nearbyCharacters: nearby,
+      worldStateContext: event,
+      retrievedMemories: memories,
+    );
+    if (!mounted) return;
+    setState(() {
+      _agentTurns[p.name] = turn;
+      _agentBusy[p.name] = false;
     });
   }
 
@@ -82,6 +146,7 @@ class _CoruscantSceneState extends State<CoruscantScene>
   void dispose() {
     _ticker.dispose();
     _newsTimer?.cancel();
+    _agentTimer?.cancel();
     super.dispose();
   }
 
@@ -102,6 +167,11 @@ class _CoruscantSceneState extends State<CoruscantScene>
                 ),
               ),
               _Hud(fps: _fps, liveAi: _liveAi, ships: _world.ships.length),
+              _AgentTheater(
+                personas: _personas,
+                turns: _agentTurns,
+                liveAi: _liveAi,
+              ),
               _NewsTicker(messages: _bulletins, current: _tickerIdx, liveAi: _liveAi),
             ],
           );
@@ -959,6 +1029,258 @@ class _NewsTicker extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// AGENT THEATER (visible NPC turns driven by Cohere)
+// =====================================================================
+
+class _AgentPersona {
+  const _AgentPersona({
+    required this.name,
+    required this.faction,
+    required this.traits,
+    required this.goal,
+    required this.color,
+  });
+  final String name;
+  final String faction;
+  final String traits;
+  final String goal;
+  final Color color;
+}
+
+class _AgentTheater extends StatelessWidget {
+  const _AgentTheater({
+    required this.personas,
+    required this.turns,
+    required this.liveAi,
+  });
+
+  final List<_AgentPersona> personas;
+  final Map<String, AgentTurn?> turns;
+  final bool liveAi;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 16,
+      bottom: 110,
+      width: 380,
+      child: _GlassCard(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF26F0F0),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    liveAi ? 'COHERE \u00b7 AGENT THEATER' : 'AGENT THEATER \u00b7 CANNED',
+                    style: const TextStyle(
+                      color: Color(0xFF26F0F0),
+                      fontSize: 10,
+                      letterSpacing: 1.4,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              for (final p in personas) ...[
+                _AgentCard(persona: p, turn: turns[p.name]),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AgentCard extends StatelessWidget {
+  const _AgentCard({required this.persona, required this.turn});
+  final _AgentPersona persona;
+  final AgentTurn? turn;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = turn;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: persona.color.withValues(alpha: 0.45), width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(color: persona.color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  persona.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              Text(
+                persona.faction,
+                style: TextStyle(
+                  color: persona.color,
+                  fontSize: 9,
+                  letterSpacing: 1.0,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (t == null)
+            const Text(
+              'Awaiting transmission\u2026',
+              style: TextStyle(color: Color(0xFF8AA0B6), fontSize: 11, fontStyle: FontStyle.italic),
+            )
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 2, right: 6),
+                  child: Icon(Icons.psychology, size: 11, color: Color(0xFF8AA0B6)),
+                ),
+                Expanded(
+                  child: Text(
+                    t.innerMonologue,
+                    style: const TextStyle(
+                      color: Color(0xFFB8C4D4),
+                      fontSize: 10.5,
+                      height: 1.35,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+              decoration: BoxDecoration(
+                color: persona.color.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(6),
+                border: Border(
+                  left: BorderSide(color: persona.color, width: 2),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '\u2192 ${t.socialTarget}',
+                    style: TextStyle(
+                      color: persona.color.withValues(alpha: 0.85),
+                      fontSize: 9,
+                      letterSpacing: 0.8,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '"${t.dialogue}"',
+                    style: const TextStyle(color: Colors.white, fontSize: 11.5, height: 1.35),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                _ActionChip(label: t.physicalActionType, color: persona.color),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    t.physicalActionDetails,
+                    style: const TextStyle(color: Color(0xFFB8C4D4), fontSize: 10.5),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            if (t.relationshipUpdates.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              for (final r in t.relationshipUpdates)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '${r.character}  ${r.trustDelta >= 0 ? '+' : ''}${r.trustDelta}  \u00b7 ${r.reason}',
+                    style: TextStyle(
+                      color: r.trustDelta >= 0 ? const Color(0xFF7CFFB2) : const Color(0xFFFF8A95),
+                      fontSize: 9.5,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  const _ActionChip({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.6), width: 0.6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 9,
+          letterSpacing: 1.0,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
