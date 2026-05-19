@@ -90,6 +90,8 @@ class _CoruscantSceneState extends State<CoruscantScene>
   SwPlanet? _focusPlanet;
   SwStarship? _focusShip;
   SwVehicle? _focusVehicle;
+  Timer? _codexTimer;
+  int _codexRotor = 0;
 
   @override
   void initState() {
@@ -166,6 +168,36 @@ class _CoruscantSceneState extends State<CoruscantScene>
       _focusPerson = results[2] as SwPerson;
       _focusVehicle = results[3] as SwVehicle;
     });
+    // Rotate codex through different SWAPI records every 8s so the
+    // panel keeps showing fresh canonical data.
+    _codexTimer = Timer.periodic(const Duration(seconds: 8), (_) => _rotateCodex());
+  }
+
+  Future<void> _rotateCodex() async {
+    const planetIds   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Tatooine .. Kamino
+    const personIds   = [1, 4, 5, 10, 14, 20, 22, 35, 43, 44]; // Luke, Vader, Leia, Obi-Wan, Han, Yoda, Boba, Padmé, Ackbar, Mon Mothma
+    const shipIds     = [9, 10, 12, 13, 15, 22, 27, 28]; // Death Star, Falcon, X-wing, TIE Adv., Executor, etc.
+    const vehicleIds  = [4, 6, 7, 8, 14, 16, 18, 19]; // Sand Crawler, T-16, Snowspeeder, TIE bomber, speeder bike, ...
+    _codexRotor++;
+    final pl = planetIds[_codexRotor % planetIds.length];
+    final pe = personIds[_codexRotor % personIds.length];
+    final sh = shipIds[_codexRotor % shipIds.length];
+    final ve = vehicleIds[_codexRotor % vehicleIds.length];
+    try {
+      final results = await Future.wait([
+        _swapi.planet(pl),
+        _swapi.starship(sh),
+        _swapi.person(pe),
+        _swapi.vehicle(ve),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _focusPlanet  = results[0] as SwPlanet;
+        _focusShip    = results[1] as SwStarship;
+        _focusPerson  = results[2] as SwPerson;
+        _focusVehicle = results[3] as SwVehicle;
+      });
+    } catch (_) {/* keep previous focus */}
   }
 
   void _scheduleNews() {
@@ -321,6 +353,7 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _ticker.dispose();
     _newsTimer?.cancel();
     _agentTimer?.cancel();
+    _codexTimer?.cancel();
     super.dispose();
   }
 
@@ -354,6 +387,13 @@ class _CoruscantSceneState extends State<CoruscantScene>
                     ],
                   ),
                 ),
+              ),
+              // SWAPI live data card (top-right) — real Star Wars API.
+              _CodexPanel(
+                planet: _focusPlanet,
+                ship: _focusShip,
+                person: _focusPerson,
+                vehicle: _focusVehicle,
               ),
             ],
           );
