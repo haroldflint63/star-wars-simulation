@@ -323,7 +323,7 @@ class _CoruscantSceneState extends State<CoruscantScene>
               Positioned.fill(
                 child: RepaintBoundary(
                   child: CustomPaint(
-                    painter: _CityPainter(_world),
+                    painter: _BoganoPainter(_world),
                   ),
                 ),
               ),
@@ -1038,7 +1038,7 @@ class _Hud extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   const Text(
-                    'CORUSCANT · LIVE',
+                    'BOGANO · ZEFFO RUINS',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w800,
@@ -1050,7 +1050,7 @@ class _Hud extends StatelessWidget {
                   _chip('${fps.toStringAsFixed(0)} FPS',
                       const Color(0xFF26F0F0)),
                   const SizedBox(width: 6),
-                  _chip('$ships craft', const Color(0xFFFFB347)),
+                  _chip('$ships motes', const Color(0xFFFF8A4C)),
                   const SizedBox(width: 6),
                   _chip(
                     liveAi ? 'COHERE · LIVE' : 'COHERE · OFFLINE',
@@ -1070,7 +1070,7 @@ class _Hud extends StatelessWidget {
                       size: 14, color: Color(0xFFA8AEBD)),
                   SizedBox(width: 6),
                   Text(
-                    'PARALLAX 3-LAYER · 5 TRAFFIC LANES',
+                    'GOD-RAYS · FORCE ECHOES · MEDITATION CIRCLE',
                     style: TextStyle(
                       color: Color(0xFFA8AEBD),
                       fontSize: 10,
@@ -1877,4 +1877,355 @@ class _MemoryStreamPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+// =====================================================================
+// JEDI: FALLEN ORDER BIOME PAINTER
+// =====================================================================
+//
+// Reinterprets the Coruscant `_World` as a Bogano/Zeffo ruin biome:
+//   - bg/mid/fg buildings -> ancient stone pillars with rim light
+//   - ships               -> fireflies / Force motes drifting in fog
+//   - holograms           -> glowing Force Echoes (blue saber pulses)
+//   - sky                 -> misty dusk + volumetric god rays
+//   - ground              -> dark soil + meditation circle
+// Plus: cinematic vignette + film grain.
+
+class _BoganoPainter extends CustomPainter {
+  _BoganoPainter(this.world);
+  final _World world;
+
+  static final _p = Paint();
+  static final _glow = Paint();
+
+  static const _sabreBlue = Color(0xFF3FB8FF);
+  static const _rimOrange = Color(0xFFFF8A4C);
+  static const _stoneDark = Color(0xFF1A2128);
+  static const _stoneMid = Color(0xFF2B3640);
+  static const _stoneLight = Color(0xFF3F4E5A);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _drawSky(canvas, size);
+    _drawDistantPeaks(canvas, size);
+    _drawGodRays(canvas, size);
+    _drawFogBand(canvas, size, 0.45, 0.04);
+    _drawRuins(canvas, world.bgBuildings, 0.30);
+    _drawFogBand(canvas, size, 0.58, 0.06);
+    _drawRuins(canvas, world.midBuildings, 0.55);
+    _drawForceEchoes(canvas);
+    _drawRuins(canvas, world.fgBuildings, 1.0);
+    _drawFireflies(canvas);
+    _drawGround(canvas, size);
+    _drawVignette(canvas, size);
+    _drawFilmGrain(canvas, size);
+  }
+
+  void _drawSky(Canvas canvas, Size s) {
+    final rect = Offset.zero & s;
+    _p
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0xFF0A1218),
+          Color(0xFF14232C),
+          Color(0xFF3A3220),
+          Color(0xFF1E1A14),
+        ],
+        stops: [0.0, 0.45, 0.70, 1.0],
+      ).createShader(rect)
+      ..style = PaintingStyle.fill;
+    canvas.drawRect(rect, _p);
+    _p.shader = null;
+
+    for (final st in world.stars) {
+      final a = (sin(st.twinkle) * 0.35 + 0.55).clamp(0.0, 1.0);
+      _p.color = const Color(0xFFCDE7FF).withValues(alpha: a * 0.35);
+      canvas.drawCircle(Offset(st.x, st.y * 0.55), st.r * 0.9, _p);
+    }
+  }
+
+  void _drawDistantPeaks(Canvas canvas, Size s) {
+    final base = s.height * 0.62;
+    final path = Path()..moveTo(0, base);
+    final rng = Random(11);
+    var x = 0.0;
+    while (x < s.width) {
+      final h = 35 + rng.nextDouble() * 70;
+      path.lineTo(x, base - h);
+      x += 40 + rng.nextDouble() * 60;
+      path.lineTo(x, base - h * 0.6);
+      x += 30 + rng.nextDouble() * 50;
+    }
+    path.lineTo(s.width, base);
+    path.close();
+    _p
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0xFF0F1A22), Color(0xFF1B2A36)],
+      ).createShader(Rect.fromLTWH(0, base - 110, s.width, 110))
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(path, _p);
+    _p.shader = null;
+
+    _p
+      ..color = _rimOrange.withValues(alpha: 0.22)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke;
+    canvas.drawPath(path, _p);
+    _p.style = PaintingStyle.fill;
+  }
+
+  void _drawGodRays(Canvas canvas, Size s) {
+    final sun = Offset(s.width * 0.72, s.height * 0.18);
+    const rays = 7;
+    for (var i = 0; i < rays; i++) {
+      final angle = (pi * 0.55) + (i / rays) * 0.55 + sin(world.t * 0.4 + i) * 0.02;
+      final len = s.height * 1.4;
+      final end = sun + Offset(cos(angle) * len, sin(angle) * len);
+      final p = Path()
+        ..moveTo(sun.dx - 6, sun.dy)
+        ..lineTo(sun.dx + 6, sun.dy)
+        ..lineTo(end.dx + 35, end.dy)
+        ..lineTo(end.dx - 35, end.dy)
+        ..close();
+      _p
+        ..shader = LinearGradient(
+          colors: [
+            _rimOrange.withValues(alpha: 0.16),
+            _rimOrange.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromPoints(sun, end))
+        ..blendMode = BlendMode.plus;
+      canvas.drawPath(p, _p);
+    }
+    _p
+      ..shader = null
+      ..blendMode = BlendMode.srcOver;
+
+    _glow
+      ..shader = RadialGradient(
+        colors: [
+          _rimOrange.withValues(alpha: 0.9),
+          _rimOrange.withValues(alpha: 0.0),
+        ],
+      ).createShader(Rect.fromCircle(center: sun, radius: 80))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(sun, 80, _glow);
+    _glow
+      ..shader = null
+      ..blendMode = BlendMode.srcOver
+      ..color = const Color(0xFFFFE0B5);
+    canvas.drawCircle(sun, 18, _glow);
+  }
+
+  void _drawFogBand(Canvas canvas, Size s, double yFrac, double alpha) {
+    final rect = Rect.fromLTWH(0, s.height * yFrac, s.width, s.height * 0.32);
+    _p
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.white.withValues(alpha: 0),
+          Colors.white.withValues(alpha: alpha),
+          Colors.white.withValues(alpha: 0),
+        ],
+      ).createShader(rect)
+      ..blendMode = BlendMode.plus;
+    canvas.drawRect(rect, _p);
+    _p
+      ..shader = null
+      ..blendMode = BlendMode.srcOver;
+  }
+
+  void _drawRuins(Canvas canvas, List<_Building> list, double depth) {
+    for (final b in list) {
+      _drawPillar(canvas, b, depth);
+    }
+  }
+
+  void _drawPillar(Canvas canvas, _Building b, double depth) {
+    final top = b.baseY - b.height;
+    final cx = b.x + b.width * 0.5;
+    final rect = Rect.fromLTWH(b.x, top, b.width, b.height);
+
+    final dark = Color.lerp(_stoneDark, Colors.black, 1.0 - depth)!;
+    final mid = Color.lerp(_stoneMid, _stoneDark, 1.0 - depth)!;
+    _p
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [mid, dark],
+      ).createShader(rect)
+      ..style = PaintingStyle.fill;
+    canvas.drawRect(rect, _p);
+
+    _p
+      ..shader = null
+      ..color = _stoneLight.withValues(alpha: 0.35 * depth)
+      ..style = PaintingStyle.fill;
+    final bands = (b.height / 45).floor().clamp(2, 7);
+    for (var i = 1; i <= bands; i++) {
+      final y = top + (b.height * i / (bands + 1));
+      canvas.drawRect(Rect.fromLTWH(b.x + 2, y, b.width - 4, 2.5), _p);
+    }
+
+    _p.color = const Color(0xFF0B0F13).withValues(alpha: 0.6 * depth);
+    canvas.drawRect(Rect.fromLTWH(cx - 2, top + 8, 4, b.height - 16), _p);
+
+    final capH = 10 + (b.roofKind * 4).toDouble();
+    _p.color = mid;
+    final cap = Path()
+      ..moveTo(b.x - 4, top)
+      ..lineTo(b.x + b.width + 4, top)
+      ..lineTo(b.x + b.width, top - capH)
+      ..lineTo(b.x, top - capH)
+      ..close();
+    canvas.drawPath(cap, _p);
+
+    _p.color = _rimOrange.withValues(alpha: 0.55 * depth);
+    canvas.drawRect(Rect.fromLTWH(b.x, top, 1.6, b.height), _p);
+
+    _p.color = _sabreBlue.withValues(alpha: 0.20 * depth);
+    canvas.drawRect(Rect.fromLTWH(b.x + b.width - 1.6, top, 1.6, b.height), _p);
+
+    final rng = Random(b.windowSeed);
+    final crystals = 1 + rng.nextInt(3);
+    for (var i = 0; i < crystals; i++) {
+      final ox = b.x + 8 + rng.nextDouble() * (b.width - 16);
+      final oy = top + 20 + rng.nextDouble() * (b.height - 40);
+      _glow
+        ..shader = RadialGradient(
+          colors: [
+            _sabreBlue.withValues(alpha: 0.9 * depth),
+            _sabreBlue.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromCircle(center: Offset(ox, oy), radius: 14))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(ox, oy), 14, _glow);
+      _glow
+        ..shader = null
+        ..blendMode = BlendMode.srcOver
+        ..color = const Color(0xFFB6E6FF);
+      canvas.drawCircle(Offset(ox, oy), 1.6 * depth, _glow);
+    }
+  }
+
+  void _drawForceEchoes(Canvas canvas) {
+    for (final h in world.holos) {
+      final pulse = (sin(h.phase * 1.6) * 0.5 + 0.5);
+      final r = 60.0 + pulse * 18.0;
+      _glow
+        ..shader = RadialGradient(
+          colors: [
+            _sabreBlue.withValues(alpha: 0.55),
+            _sabreBlue.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromCircle(center: Offset(h.x, h.y), radius: r))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(h.x, h.y), r, _glow);
+      _glow
+        ..shader = null
+        ..blendMode = BlendMode.srcOver
+        ..color = const Color(0xFFE0F4FF).withValues(alpha: 0.85);
+      canvas.drawCircle(Offset(h.x, h.y), 3.2, _glow);
+
+      _p
+        ..color = _sabreBlue.withValues(alpha: 0.4)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke;
+      for (var i = 0; i < 4; i++) {
+        final dy = (h.phase * 30 + i * 18) % 90;
+        canvas.drawLine(
+          Offset(h.x - 8, h.y - dy),
+          Offset(h.x + 8, h.y - dy),
+          _p,
+        );
+      }
+      _p.style = PaintingStyle.fill;
+    }
+  }
+
+  void _drawFireflies(Canvas canvas) {
+    for (final s in world.ships) {
+      final flicker = (sin(world.t * 3 + s.x * 0.07) * 0.35 + 0.65);
+      final wy = s.y + sin(world.t * 1.2 + s.x * 0.04) * 6;
+      _glow
+        ..shader = RadialGradient(
+          colors: [
+            _rimOrange.withValues(alpha: 0.8 * flicker),
+            _rimOrange.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromCircle(center: Offset(s.x, wy), radius: 9 * s.scale))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(s.x, wy), 9 * s.scale, _glow);
+      _glow
+        ..shader = null
+        ..blendMode = BlendMode.srcOver
+        ..color = const Color(0xFFFFE2B0).withValues(alpha: flicker);
+      canvas.drawCircle(Offset(s.x, wy), 1.4 * s.scale, _glow);
+    }
+  }
+
+  void _drawGround(Canvas canvas, Size s) {
+    final groundY = s.height * 0.78;
+    final rect = Rect.fromLTWH(0, groundY, s.width, s.height - groundY);
+    _p
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0xFF1A1410),
+          Color(0xFF080606),
+        ],
+      ).createShader(rect)
+      ..style = PaintingStyle.fill;
+    canvas.drawRect(rect, _p);
+    _p.shader = null;
+
+    final c = Offset(s.width * 0.5, s.height * 0.86);
+    for (var i = 0; i < 3; i++) {
+      _p
+        ..color = _sabreBlue.withValues(alpha: 0.10 - i * 0.025)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke;
+      canvas.drawOval(
+        Rect.fromCenter(center: c, width: 220 + i * 80.0, height: 36 + i * 14.0),
+        _p,
+      );
+    }
+    _p.style = PaintingStyle.fill;
+  }
+
+  void _drawVignette(Canvas canvas, Size s) {
+    final rect = Offset.zero & s;
+    _p
+      ..shader = RadialGradient(
+        colors: [
+          Colors.transparent,
+          Colors.black.withValues(alpha: 0.55),
+        ],
+        stops: const [0.55, 1.0],
+      ).createShader(rect)
+      ..style = PaintingStyle.fill;
+    canvas.drawRect(rect, _p);
+    _p.shader = null;
+  }
+
+  void _drawFilmGrain(Canvas canvas, Size s) {
+    final rng = Random((world.t * 60).floor());
+    _p.color = Colors.white.withValues(alpha: 0.025);
+    for (var i = 0; i < 90; i++) {
+      canvas.drawCircle(
+        Offset(rng.nextDouble() * s.width, rng.nextDouble() * s.height),
+        0.6,
+        _p,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BoganoPainter old) => true;
 }
