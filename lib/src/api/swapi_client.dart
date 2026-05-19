@@ -69,6 +69,35 @@ class SwPlanet {
       );
 }
 
+class SwVehicle {
+  SwVehicle({
+    required this.name,
+    required this.model,
+    required this.manufacturer,
+    required this.vehicleClass,
+    required this.crew,
+    required this.passengers,
+    required this.maxSpeed,
+  });
+  final String name;
+  final String model;
+  final String manufacturer;
+  final String vehicleClass;
+  final String crew;
+  final String passengers;
+  final String maxSpeed;
+
+  factory SwVehicle.fromJson(Map<String, dynamic> p) => SwVehicle(
+        name: (p['name'] as String?) ?? 'Unknown',
+        model: (p['model'] as String?) ?? '?',
+        manufacturer: (p['manufacturer'] as String?) ?? '?',
+        vehicleClass: (p['vehicle_class'] as String?) ?? '?',
+        crew: (p['crew'] as String?) ?? '?',
+        passengers: (p['passengers'] as String?) ?? '?',
+        maxSpeed: (p['max_atmosphering_speed'] as String?) ?? '?',
+      );
+}
+
 class SwStarship {
   SwStarship({
     required this.name,
@@ -105,6 +134,29 @@ class SwapiClient {
   final Map<String, SwPerson> _peopleCache = {};
   final Map<String, SwPlanet> _planetCache = {};
   final Map<String, SwStarship> _starshipCache = {};
+  final Map<String, SwVehicle> _vehicleCache = {};
+
+  Future<SwVehicle> vehicle(int id) async {
+    final key = 'v$id';
+    if (_vehicleCache.containsKey(key)) return _vehicleCache[key]!;
+    try {
+      final res = await http.get(Uri.parse('$_base/vehicles/$id')).timeout(_timeout);
+      if (res.statusCode == 200) {
+        final json = jsonDecode(res.body) as Map<String, dynamic>;
+        final props = ((json['result'] as Map?)?['properties'] as Map?)?.cast<String, dynamic>();
+        if (props != null) {
+          final v = SwVehicle.fromJson(props);
+          _vehicleCache[key] = v;
+          return v;
+        }
+      }
+    } catch (e) {
+      debugPrint('SWAPI vehicle($id) error: $e');
+    }
+    final fb = _fallbackVehicles[id] ?? _fallbackVehicles[4]!;
+    _vehicleCache[key] = fb;
+    return fb;
+  }
 
   Future<SwPerson> person(int id) async {
     final key = 'p$id';
@@ -190,5 +242,12 @@ class SwapiClient {
     10: SwStarship(name: 'Millennium Falcon', model: 'YT-1300 light freighter', manufacturer: 'Corellian Engineering Corp', starshipClass: 'Light freighter', crew: '4', hyperdrive: '0.5', maxSpeed: '1050'),
     12: SwStarship(name: 'X-wing', model: 'T-65 X-wing', manufacturer: 'Incom Corporation', starshipClass: 'Starfighter', crew: '1', hyperdrive: '1.0', maxSpeed: '1050'),
     15: SwStarship(name: 'Executor', model: 'Executor-class star dreadnought', manufacturer: 'Kuat Drive Yards', starshipClass: 'Star dreadnought', crew: '279144', hyperdrive: '2.0', maxSpeed: 'unknown'),
+  };
+
+  static final Map<int, SwVehicle> _fallbackVehicles = {
+    4: SwVehicle(name: 'Sand Crawler', model: 'Digger Crawler', manufacturer: 'Corellia Mining Corporation', vehicleClass: 'wheeled', crew: '46', passengers: '30', maxSpeed: '30'),
+    7: SwVehicle(name: 'Snowspeeder', model: 't-47 airspeeder', manufacturer: 'Incom corporation', vehicleClass: 'airspeeder', crew: '2', passengers: '0', maxSpeed: '650'),
+    8: SwVehicle(name: 'TIE bomber', model: 'TIE/sa bomber', manufacturer: 'Sienar Fleet Systems', vehicleClass: 'space/planetary bomber', crew: '1', passengers: '0', maxSpeed: '850'),
+    14: SwVehicle(name: 'Speeder bike', model: '74-Z speeder bike', manufacturer: 'Aratech Repulsor Company', vehicleClass: 'speeder', crew: '1', passengers: '1', maxSpeed: '360'),
   };
 }

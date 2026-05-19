@@ -16,6 +16,7 @@ import 'package:flutter/scheduler.dart';
 import '../agents/agent_memory.dart';
 import '../api/cohere_client.dart';
 import '../api/swapi_client.dart';
+import '../audio/star_wars_sounds.dart';
 
 class CoruscantScene extends StatefulWidget {
   const CoruscantScene({super.key});
@@ -88,6 +89,7 @@ class _CoruscantSceneState extends State<CoruscantScene>
   SwPerson? _focusPerson;
   SwPlanet? _focusPlanet;
   SwStarship? _focusShip;
+  SwVehicle? _focusVehicle;
 
   @override
   void initState() {
@@ -109,6 +111,8 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _scheduleAgents();
     _loadCodex();
     _bootstrapPlans();
+    // Free ambient space sound (freesound.org CDN, no key required).
+    StarWarsSounds.playAmbientSpace();
   }
 
   Future<void> _bootstrapPlans() async {
@@ -151,12 +155,14 @@ class _CoruscantSceneState extends State<CoruscantScene>
       _swapi.planet(9),     // Coruscant
       _swapi.starship(10),  // Millennium Falcon
       _swapi.person(14),    // Han Solo
+      _swapi.vehicle(14),   // 74-Z speeder bike
     ]);
     if (!mounted) return;
     setState(() {
       _focusPlanet = results[0] as SwPlanet;
       _focusShip = results[1] as SwStarship;
       _focusPerson = results[2] as SwPerson;
+      _focusVehicle = results[3] as SwVehicle;
     });
   }
 
@@ -288,6 +294,11 @@ class _CoruscantSceneState extends State<CoruscantScene>
       _agentTurns[p.name] = turn;
       _agentBusy[p.name] = false;
     });
+    // Sims-style: surface the action above the matching walker.
+    final actionLabel = turn.physicalActionType == 'IDLE' || turn.physicalActionDetails.isEmpty
+        ? (turn.dialogue.isNotEmpty ? turn.dialogue : turn.innerMonologue)
+        : '${turn.physicalActionType.toLowerCase()} · ${turn.physicalActionDetails}';
+    _world.setActionForPersona(p.name, actionLabel);
   }
 
   void _onTick(Duration elapsed) {
@@ -327,11 +338,12 @@ class _CoruscantSceneState extends State<CoruscantScene>
                   ),
                 ),
               ),
-              _Hud(fps: _fps, liveAi: _liveAi, ships: _world.ships.length),
+              _Hud(fps: _fps, liveAi: _liveAi, ships: _world.ships.length, rebelScore: _world.rebelScore, imperialScore: _world.imperialScore),
               _CodexPanel(
                 planet: _focusPlanet,
                 ship: _focusShip,
                 person: _focusPerson,
+                vehicle: _focusVehicle,
               ),
               _AgentTheater(
                 personas: _personas,
@@ -373,6 +385,14 @@ class _World {
   final List<_Ship> ships = [];
   final List<_Hologram> holos = [];
   final List<_Walker> walkers = [];
+  final List<_Bolt> bolts = [];
+
+  // Combat HUD state
+  int rebelScore = 0;
+  int imperialScore = 0;
+  double shake = 0;     // decays
+  double shakeX = 0, shakeY = 0;
+  final _combatRand = Random(11);
 
   // Animated globals
   double t = 0;
@@ -437,32 +457,62 @@ class _World {
       ));
     }
 
-    // Ground walkers (Jedi + companions).
+    // Ground walkers — Sims-style NPCs. Some are wired to LLM personas so
+    // their action bubble mirrors the latest agent turn; some are static
+    // antagonists/protagonists to drive combat.
     final gy = h * 0.80;
     walkers.addAll([
+      // CAL — neutral Jedi (no faction combat), lit blue saber
       _Walker(
         name: 'CAL',
-        x: w * 0.30, y: gy, dir: 1,
+        x: w * 0.18, y: gy, dir: 1,
         speed: 22, scale: 1.0,
         bodyColor: const Color(0xFF7A4B2A),
-        accentColor: const Color(0xFF3FB8FF),   // blue saber
+        accentColor: const Color(0xFF3FB8FF),
         hasSaber: true,
       ),
+      // HAN SOLO — Rebel, blaster, mapped to persona
       _Walker(
-        name: 'MERRIN',
-        x: w * 0.55, y: gy, dir: -1,
-        speed: 18, scale: 0.95,
-        bodyColor: const Color(0xFF2A1E1E),
-        accentColor: const Color(0xFF8FE3A3),   // nightsister green
+        name: 'HAN',
+        personaName: 'Han Solo',
+        faction: 'Rebel',
+        x: w * 0.34, y: gy, dir: 1,
+        speed: 26, scale: 1.0,
+        bodyColor: const Color(0xFF2C2620),
+        accentColor: const Color(0xFFFFB347),
         hasSaber: false,
       ),
+      // LEIA — Rebel, blaster, mapped to persona
       _Walker(
-        name: 'GREEZ',
-        x: w * 0.78, y: gy, dir: 1,
-        speed: 14, scale: 0.85,
-        bodyColor: const Color(0xFF3A2C20),
-        accentColor: const Color(0xFFFF8A4C),
+        name: 'LEIA',
+        personaName: 'Leia Organa',
+        faction: 'Rebel',
+        x: w * 0.46, y: gy, dir: 1,
+        speed: 22, scale: 0.96,
+        bodyColor: const Color(0xFFEFEFEF),
+        accentColor: const Color(0xFF26F0F0),
         hasSaber: false,
+      ),
+      // BOBA FETT — Empire-aligned, blaster, mapped to persona
+      _Walker(
+        name: 'BOBA',
+        personaName: 'Boba Fett',
+        faction: 'Empire',
+        x: w * 0.66, y: gy, dir: -1,
+        speed: 24, scale: 1.0,
+        bodyColor: const Color(0xFF3F4534),
+        accentColor: const Color(0xFFFF5C7A),
+        hasSaber: false,
+      ),
+      // VADER — Empire, red saber, no persona (cycles canned actions)
+      _Walker(
+        name: 'VADER',
+        faction: 'Empire',
+        x: w * 0.84, y: gy, dir: -1,
+        speed: 18, scale: 1.05,
+        bodyColor: const Color(0xFF0A0A0A),
+        accentColor: const Color(0xFFFF3158),
+        hasSaber: true,
       ),
     ]);
   }
@@ -529,6 +579,119 @@ class _World {
       // bounce off edges
       if (wkr.x < 30) { wkr.x = 30; wkr.dir = 1; }
       if (wkr.x > w - 30) { wkr.x = w - 30; wkr.dir = -1; }
+      // decay timers
+      if (wkr.hitFlash > 0) wkr.hitFlash = max(0, wkr.hitFlash - dt * 2.5);
+      if (wkr.muzzleFlash > 0) wkr.muzzleFlash = max(0, wkr.muzzleFlash - dt * 6);
+      if (wkr.saberSwing > 0) wkr.saberSwing = max(0, wkr.saberSwing - dt * 4);
+      if (wkr.fireCooldown > 0) wkr.fireCooldown -= dt;
+      if (wkr.actionTtl > 0) {
+        wkr.actionTtl -= dt;
+        if (wkr.actionTtl <= 0) wkr.action = null;
+      }
+      // respawn if dead
+      if (wkr.hp <= 0) {
+        wkr.hp = wkr.maxHp;
+        wkr.x = wkr.dir > 0 ? 30 : w - 30;
+        wkr.hitFlash = 0;
+        wkr.action = 'respawn · reinforcements arrive';
+        wkr.actionTtl = 4.0;
+      }
+    }
+
+    // Combat: opposing-faction walkers in range exchange fire.
+    for (final shooter in walkers) {
+      if (shooter.faction == 'Neutral') continue;
+      if (shooter.fireCooldown > 0) continue;
+      _Walker? target;
+      double bestDx = double.infinity;
+      for (final other in walkers) {
+        if (other == shooter) continue;
+        if (other.faction == 'Neutral' || other.faction == shooter.faction) continue;
+        final dx = (other.x - shooter.x).abs();
+        if (dx < shooter.weaponRange && dx < bestDx) {
+          bestDx = dx;
+          target = other;
+        }
+      }
+      if (target == null) continue;
+      // face target
+      shooter.dir = target.x > shooter.x ? 1 : -1;
+      shooter.fireCooldown = 1.0 / shooter.fireRate + _combatRand.nextDouble() * 0.6;
+      shooter.muzzleFlash = 1.0;
+      // spawn bolt from shooter chest toward target chest
+      final sx = shooter.x + shooter.dir * 10;
+      final sy = shooter.y - 22;
+      final tx = target.x;
+      final ty = target.y - 22;
+      final dxv = tx - sx;
+      final dyv = ty - sy;
+      final dist = sqrt(dxv * dxv + dyv * dyv).clamp(1, double.infinity);
+      const boltSpeed = 520.0;
+      final color = shooter.faction == 'Rebel'
+          ? const Color(0xFFFF3158)    // Rebel blaster bolts are red
+          : const Color(0xFF3FB8FF);   // Imperial blaster bolts are blue
+      bolts.add(_Bolt(
+        x: sx, y: sy,
+        vx: dxv / dist * boltSpeed,
+        vy: dyv / dist * boltSpeed,
+        color: color,
+        fromFaction: shooter.faction,
+      ));
+      // Throttled SFX so we don't spam audio context
+      if (_combatRand.nextDouble() < 0.35) {
+        StarWarsSounds.blasterFire();
+      }
+    }
+
+    // Move bolts + collide with opposing-faction walkers.
+    for (final b in bolts) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.age += dt;
+      if (b.age > 2.4 || b.x < -20 || b.x > w + 20 || b.y < 0 || b.y > h) {
+        b.alive = false;
+        continue;
+      }
+      for (final wkr in walkers) {
+        if (wkr.faction == 'Neutral') continue;
+        if (wkr.faction == b.fromFaction) continue;
+        final dx = wkr.x - b.x;
+        final dy = (wkr.y - 22) - b.y;
+        if (dx * dx + dy * dy < 14 * 14) {
+          b.alive = false;
+          wkr.hp -= 18;
+          wkr.hitFlash = 1.0;
+          shake = (shake + 0.5).clamp(0, 1.6);
+          if (wkr.hp <= 0) {
+            if (b.fromFaction == 'Rebel') rebelScore++;
+            else imperialScore++;
+            StarWarsSounds.explosion();
+          }
+          break;
+        }
+      }
+    }
+    bolts.removeWhere((b) => !b.alive);
+
+    // Camera shake decay + offsets.
+    if (shake > 0) {
+      shake = max(0, shake - dt * 2.0);
+      shakeX = (_combatRand.nextDouble() - 0.5) * 6 * shake;
+      shakeY = (_combatRand.nextDouble() - 0.5) * 4 * shake;
+    } else {
+      shakeX = 0; shakeY = 0;
+    }
+  }
+
+  /// Mirror an LLM agent's latest action onto its matching ground walker
+  /// as a Sims-style action bubble.
+  void setActionForPersona(String personaName, String text) {
+    for (final wkr in walkers) {
+      if (wkr.personaName == personaName) {
+        wkr.action = text.length > 80 ? '${text.substring(0, 77)}…' : text;
+        wkr.actionTtl = 7.0;
+        return;
+      }
     }
   }
 }
@@ -593,14 +756,55 @@ class _Walker {
     required this.bodyColor,
     required this.accentColor,
     required this.hasSaber,
-  }) : gait = 0;
+    this.personaName,
+    this.faction = 'Neutral',
+    this.maxHp = 100,
+    this.weaponRange = 320,
+    this.fireRate = 1.6,
+  })  : gait = 0,
+        hp = maxHp,
+        hitFlash = 0,
+        fireCooldown = 0,
+        action = null,
+        actionTtl = 0,
+        muzzleFlash = 0,
+        saberSwing = 0;
   final String name;
+  final String? personaName;
+  final String faction; // 'Rebel' | 'Empire' | 'Neutral'
   double x, y, gait;
   int dir;
   final double speed, scale;
   final Color bodyColor;
   final Color accentColor;
   final bool hasSaber;
+
+  final double maxHp;
+  double hp;
+  double hitFlash;        // 0..1, decays
+  double fireCooldown;    // seconds until can fire
+  final double weaponRange;
+  final double fireRate;  // shots per second
+  String? action;         // Sims-style bubble text
+  double actionTtl;       // seconds remaining
+  double muzzleFlash;
+  double saberSwing;
+}
+
+class _Bolt {
+  _Bolt({
+    required this.x,
+    required this.y,
+    required this.vx,
+    required this.vy,
+    required this.color,
+    required this.fromFaction,
+  })  : age = 0,
+        alive = true;
+  double x, y, vx, vy, age;
+  bool alive;
+  final Color color;
+  final String fromFaction;
 }
 
 // =====================================================================
@@ -1070,10 +1274,12 @@ class _CityPainter extends CustomPainter {
 // =====================================================================
 
 class _Hud extends StatelessWidget {
-  const _Hud({required this.fps, required this.liveAi, required this.ships});
+  const _Hud({required this.fps, required this.liveAi, required this.ships, required this.rebelScore, required this.imperialScore});
   final double fps;
   final bool liveAi;
   final int ships;
+  final int rebelScore;
+  final int imperialScore;
 
   @override
   Widget build(BuildContext context) {
@@ -1117,6 +1323,10 @@ class _Hud extends StatelessWidget {
                         ? const Color(0xFF7C5CFF)
                         : const Color(0xFF6B7184),
                   ),
+                  const SizedBox(width: 6),
+                  _chip('REBELS $rebelScore', const Color(0xFF26F0F0)),
+                  const SizedBox(width: 4),
+                  _chip('EMPIRE $imperialScore', const Color(0xFFFF3158)),
                 ],
               ),
             ),
@@ -1528,10 +1738,11 @@ class _ActionChip extends StatelessWidget {
 // =====================================================================
 
 class _CodexPanel extends StatelessWidget {
-  const _CodexPanel({required this.planet, required this.ship, required this.person});
+  const _CodexPanel({required this.planet, required this.ship, required this.person, required this.vehicle});
   final SwPlanet? planet;
   final SwStarship? ship;
   final SwPerson? person;
+  final SwVehicle? vehicle;
 
   @override
   Widget build(BuildContext context) {
@@ -1600,6 +1811,18 @@ class _CodexPanel extends StatelessWidget {
                   if (person != null) 'Eyes: ${person!.eyeColor}',
                 ],
                 const Color(0xFFFF5C7A),
+              ),
+              const SizedBox(height: 8),
+              _codexBlock(
+                'VEHICLE',
+                vehicle?.name ?? 'Loading\u2026',
+                [
+                  if (vehicle != null) 'Class: ${vehicle!.vehicleClass}',
+                  if (vehicle != null) 'Model: ${vehicle!.model}',
+                  if (vehicle != null) 'Crew: ${vehicle!.crew}',
+                  if (vehicle != null) 'Max Speed: ${vehicle!.maxSpeed}',
+                ],
+                const Color(0xFF8FE3A3),
               ),
             ],
           ),
@@ -1965,6 +2188,10 @@ class _BoganoPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    canvas.save();
+    if (world.shakeX != 0 || world.shakeY != 0) {
+      canvas.translate(world.shakeX, world.shakeY);
+    }
     _drawSky(canvas, size);
     _drawDistantPeaks(canvas, size);
     _drawGodRays(canvas, size);
@@ -1977,8 +2204,41 @@ class _BoganoPainter extends CustomPainter {
     _drawFireflies(canvas);
     _drawGround(canvas, size);
     _drawWalkers(canvas);
+    _drawBolts(canvas);
     _drawVignette(canvas, size);
     _drawFilmGrain(canvas, size);
+    canvas.restore();
+  }
+
+  void _drawBolts(Canvas canvas) {
+    for (final b in world.bolts) {
+      // glow halo
+      _glow
+        ..shader = RadialGradient(
+          colors: [b.color.withValues(alpha: 0.55), b.color.withValues(alpha: 0)],
+        ).createShader(Rect.fromCircle(center: Offset(b.x, b.y), radius: 10))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(b.x, b.y), 10, _glow);
+      _glow
+        ..shader = null
+        ..blendMode = BlendMode.srcOver;
+      // motion-blur trail
+      final tailLen = 14.0;
+      final speed = sqrt(b.vx * b.vx + b.vy * b.vy).clamp(1, double.infinity);
+      final tx = b.x - b.vx / speed * tailLen;
+      final ty = b.y - b.vy / speed * tailLen;
+      _p
+        ..color = b.color.withValues(alpha: 0.55)
+        ..strokeWidth = 3.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(tx, ty), Offset(b.x, b.y), _p);
+      _p
+        ..color = Colors.white
+        ..strokeWidth = 1.4;
+      canvas.drawLine(Offset(tx, ty), Offset(b.x, b.y), _p);
+      _p.style = PaintingStyle.fill;
+    }
   }
 
   void _drawSky(Canvas canvas, Size s) {
@@ -2432,6 +2692,109 @@ class _BoganoPainter extends CustomPainter {
       _p,
     );
     _p.style = PaintingStyle.fill;
+
+    // HP bar for combatants
+    if (w.faction != 'Neutral') {
+      final barW = 28 * s;
+      final barY = headY - 26;
+      _p
+        ..color = Colors.black.withValues(alpha: 0.55)
+        ..style = PaintingStyle.fill;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(cx - barW / 2, barY, barW, 3.2),
+          const Radius.circular(2),
+        ),
+        _p,
+      );
+      final pct = (w.hp / w.maxHp).clamp(0.0, 1.0);
+      _p.color = w.faction == 'Rebel'
+          ? const Color(0xFF26F0F0)
+          : const Color(0xFFFF3158);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(cx - barW / 2, barY, barW * pct, 3.2),
+          const Radius.circular(2),
+        ),
+        _p,
+      );
+    }
+
+    // Muzzle flash burst
+    if (w.muzzleFlash > 0) {
+      final mx = cx + w.dir * 11 * s;
+      final my = torsoTop + 16 * s;
+      _glow
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0xFFFFE08A).withValues(alpha: 0.85 * w.muzzleFlash),
+            const Color(0xFFFFE08A).withValues(alpha: 0),
+          ],
+        ).createShader(Rect.fromCircle(center: Offset(mx, my), radius: 14 * s))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(mx, my), 14 * s, _glow);
+      _glow
+        ..shader = null
+        ..blendMode = BlendMode.srcOver;
+    }
+
+    // Hit flash white overlay
+    if (w.hitFlash > 0) {
+      _p
+        ..color = Colors.white.withValues(alpha: 0.55 * w.hitFlash)
+        ..style = PaintingStyle.fill;
+      canvas.drawRect(
+        Rect.fromLTRB(cx - 8 * s, headY - headR, cx + 8 * s, feetY),
+        _p,
+      );
+    }
+
+    // Sims-style activity bubble above name
+    if (w.action != null && w.action!.isNotEmpty) {
+      final bubble = TextPainter(
+        text: TextSpan(
+          text: w.action!,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            height: 1.2,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+        ellipsis: '…',
+      )..layout(maxWidth: 150);
+      final bx = (cx - bubble.width / 2 - 8).clamp(4.0, 1e6);
+      final by = headY - 26 - bubble.height - 12;
+      final rect = Rect.fromLTWH(bx, by, bubble.width + 16, bubble.height + 10);
+      _p
+        ..color = Colors.black.withValues(alpha: 0.75)
+        ..style = PaintingStyle.fill;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(10)),
+        _p,
+      );
+      _p
+        ..color = w.accentColor.withValues(alpha: 0.7)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(10)),
+        _p,
+      );
+      _p.style = PaintingStyle.fill;
+      bubble.paint(canvas, Offset(bx + 8, by + 5));
+      // Little tail
+      final tail = Path()
+        ..moveTo(cx - 3, by + bubble.height + 10)
+        ..lineTo(cx + 3, by + bubble.height + 10)
+        ..lineTo(cx, by + bubble.height + 16)
+        ..close();
+      _p.color = Colors.black.withValues(alpha: 0.75);
+      canvas.drawPath(tail, _p);
+    }
   }
 
   @override
