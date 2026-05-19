@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../api/cohere_client.dart';
+import '../api/swapi_client.dart';
 
 class CoruscantScene extends StatefulWidget {
   const CoruscantScene({super.key});
@@ -41,27 +42,30 @@ class _CoruscantSceneState extends State<CoruscantScene>
   Timer? _newsTimer;
   bool _liveAi = false;
 
-  // Autonomous agents (visible NPC theater)
+  // Autonomous agents (visible NPC theater) — bound to real SWAPI characters.
   static const List<_AgentPersona> _personas = [
     _AgentPersona(
-      name: 'Vex Rashar',
-      faction: 'Bounty Hunters Guild',
-      traits: 'Cunning, desperate for credits, fiercely loyal to old crewmates',
-      goal: 'Collect the bounty on Senator Orlan without alerting CSF.',
+      name: 'Han Solo',
+      swapiPersonId: 14,
+      faction: 'Rebel Alliance',
+      traits: 'Cocky smuggler, fiercely loyal, allergic to authority, in debt to Jabba',
+      goal: 'Pay off the Hutts and keep the Falcon flying.',
       color: Color(0xFFFFB347),
     ),
     _AgentPersona(
-      name: 'Kael Veronn',
+      name: 'Leia Organa',
+      swapiPersonId: 5,
       faction: 'Rebel Alliance',
-      traits: 'Idealistic, sharp tactician, distrusts authority',
-      goal: 'Smuggle intel cylinders off Coruscant on the next freighter.',
+      traits: 'Senator-strategist, ruthless under pressure, morally certain',
+      goal: 'Move stolen Death Star intel off Coruscant within 12 standard hours.',
       color: Color(0xFF26F0F0),
     ),
     _AgentPersona(
-      name: 'ISB Agent Talos',
-      faction: 'Galactic Empire',
-      traits: 'Cold, methodical, devoted to Imperial order',
-      goal: 'Identify and arrest the Rebel cell operating in CoCo Town.',
+      name: 'Boba Fett',
+      swapiPersonId: 22,
+      faction: 'Bounty Hunters Guild',
+      traits: 'Mandalorian discipline, silent operator, mercenary precision',
+      goal: 'Collect the bounty on the smuggler captain Solo — alive if possible.',
       color: Color(0xFFFF5C7A),
     ),
   ];
@@ -70,6 +74,12 @@ class _CoruscantSceneState extends State<CoruscantScene>
   Timer? _agentTimer;
   int _agentRotor = 0;
 
+  // SWAPI codex
+  final _swapi = SwapiClient();
+  SwPerson? _focusPerson;
+  SwPlanet? _focusPlanet;
+  SwStarship? _focusShip;
+
   @override
   void initState() {
     super.initState();
@@ -77,6 +87,21 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _liveAi = _cohere.hasKey;
     _scheduleNews();
     _scheduleAgents();
+    _loadCodex();
+  }
+
+  Future<void> _loadCodex() async {
+    final results = await Future.wait([
+      _swapi.planet(9),     // Coruscant
+      _swapi.starship(10),  // Millennium Falcon
+      _swapi.person(14),    // Han Solo
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _focusPlanet = results[0] as SwPlanet;
+      _focusShip = results[1] as SwStarship;
+      _focusPerson = results[2] as SwPerson;
+    });
   }
 
   void _scheduleNews() {
@@ -112,10 +137,23 @@ class _CoruscantSceneState extends State<CoruscantScene>
       'You last saw ${nearby.first} arguing with a Czerka rep about credits.',
       if (nearby.length > 1) 'You owe ${nearby[1]} a favor from the Battle of Scarif.',
     ];
+    // Pull canonical SWAPI bio for the persona to give Cohere real data.
+    String traits = p.traits;
+    if (p.swapiPersonId != null) {
+      try {
+        final bio = await _swapi.person(p.swapiPersonId!);
+        memories.add(
+          'Canonical SWAPI bio: ${bio.name}, born ${bio.birthYear}, '
+          'homeworld signal traces to ${bio.homeworld.isNotEmpty ? bio.homeworld : 'unknown'}, '
+          'height ${bio.height}cm, mass ${bio.mass}kg, eye color ${bio.eyeColor}.',
+        );
+        traits = '${p.traits}. Canon: ${bio.gender}, born ${bio.birthYear}.';
+      } catch (_) {/* ignore, fall back to traits */}
+    }
     final turn = await _cohere.agentTurn(
       agentName: p.name,
       faction: p.faction,
-      traits: p.traits,
+      traits: traits,
       longTermGoal: p.goal,
       currentLocation: 'Outlander Club, Uscru District, Coruscant',
       nearbyCharacters: nearby,
@@ -167,6 +205,11 @@ class _CoruscantSceneState extends State<CoruscantScene>
                 ),
               ),
               _Hud(fps: _fps, liveAi: _liveAi, ships: _world.ships.length),
+              _CodexPanel(
+                planet: _focusPlanet,
+                ship: _focusShip,
+                person: _focusPerson,
+              ),
               _AgentTheater(
                 personas: _personas,
                 turns: _agentTurns,
@@ -1046,12 +1089,14 @@ class _AgentPersona {
     required this.traits,
     required this.goal,
     required this.color,
+    this.swapiPersonId,
   });
   final String name;
   final String faction;
   final String traits;
   final String goal;
   final Color color;
+  final int? swapiPersonId;
 }
 
 class _AgentTheater extends StatelessWidget {
@@ -1282,6 +1327,151 @@ class _ActionChip extends StatelessWidget {
           letterSpacing: 1.0,
           fontWeight: FontWeight.w700,
         ),
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// SWAPI CODEX PANEL (top-right)
+// =====================================================================
+
+class _CodexPanel extends StatelessWidget {
+  const _CodexPanel({required this.planet, required this.ship, required this.person});
+  final SwPlanet? planet;
+  final SwStarship? ship;
+  final SwPerson? person;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 64,
+      right: 16,
+      width: 320,
+      child: _GlassCard(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(color: Color(0xFFFFB347), shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'SWAPI \u00b7 GALACTIC CODEX',
+                    style: TextStyle(
+                      color: Color(0xFFFFB347),
+                      fontSize: 10,
+                      letterSpacing: 1.4,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              _codexBlock(
+                'PLANET',
+                planet?.name ?? 'Loading\u2026',
+                [
+                  if (planet != null) 'Climate: ${planet!.climate}',
+                  if (planet != null) 'Terrain: ${planet!.terrain}',
+                  if (planet != null) 'Pop: ${_humanize(planet!.population)}',
+                  if (planet != null) 'Gravity: ${planet!.gravity}',
+                ],
+                const Color(0xFF26F0F0),
+              ),
+              const SizedBox(height: 8),
+              _codexBlock(
+                'STARSHIP',
+                ship?.name ?? 'Loading\u2026',
+                [
+                  if (ship != null) 'Class: ${ship!.starshipClass}',
+                  if (ship != null) 'Model: ${ship!.model}',
+                  if (ship != null) 'Hyperdrive: ${ship!.hyperdrive}',
+                  if (ship != null) 'Crew: ${ship!.crew}',
+                ],
+                const Color(0xFFFFB347),
+              ),
+              const SizedBox(height: 8),
+              _codexBlock(
+                'CAPTAIN',
+                person?.name ?? 'Loading\u2026',
+                [
+                  if (person != null) 'Born: ${person!.birthYear}',
+                  if (person != null) 'Height: ${person!.height}cm',
+                  if (person != null) 'Mass: ${person!.mass}kg',
+                  if (person != null) 'Eyes: ${person!.eyeColor}',
+                ],
+                const Color(0xFFFF5C7A),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _humanize(String pop) {
+    final n = int.tryParse(pop);
+    if (n == null) return pop;
+    if (n >= 1e12) return '${(n / 1e12).toStringAsFixed(1)}T';
+    if (n >= 1e9) return '${(n / 1e9).toStringAsFixed(1)}B';
+    if (n >= 1e6) return '${(n / 1e6).toStringAsFixed(1)}M';
+    if (n >= 1e3) return '${(n / 1e3).toStringAsFixed(1)}K';
+    return pop;
+  }
+
+  Widget _codexBlock(String label, String title, List<String> rows, Color color) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.45), width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 9,
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          if (rows.isNotEmpty) const SizedBox(height: 4),
+          for (final r in rows)
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Text(
+                r,
+                style: const TextStyle(color: Color(0xFFB8C4D4), fontSize: 10.5, height: 1.3),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
       ),
     );
   }
