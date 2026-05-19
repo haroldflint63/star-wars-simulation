@@ -3231,9 +3231,9 @@ class _BoganoPainter extends CustomPainter {
         final g = (b.windowSeed + gi * 271) & 0x0F;
         // Build a fake 3-segment glyph
         _p.color = const Color(0xFFFFD46B).withValues(alpha: 0.95);
-        canvas.drawRect(Rect.fromLTWH(bbx, gy, 4 + (g & 0x03), 1.2), _p);
-        canvas.drawRect(Rect.fromLTWH(bbx + 5, gy + 1.6, 4 + ((g >> 2) & 0x03), 1.2), _p);
-        canvas.drawRect(Rect.fromLTWH(bbx + 2, gy + 3.2, 3 + ((g >> 1) & 0x03), 1.2), _p);
+        canvas.drawRect(Rect.fromLTWH(bbx, gy, 4.0 + (g & 0x03), 1.2), _p);
+        canvas.drawRect(Rect.fromLTWH(bbx + 5, gy + 1.6, 4.0 + ((g >> 2) & 0x03), 1.2), _p);
+        canvas.drawRect(Rect.fromLTWH(bbx + 2, gy + 3.2, 3.0 + ((g >> 1) & 0x03), 1.2), _p);
       }
       canvas.restore();
       // Soft red bloom around billboard
