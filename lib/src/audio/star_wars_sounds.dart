@@ -144,18 +144,11 @@ class StarWarsSounds {
     }
   }
 
-  /// Play Imperial March theme (placeholder)
+  /// Play Imperial March — procedural (no network).
   static Future<void> playImperialMarch() async {
     if (!_soundEnabled) return;
-    try {
-      await _musicPlayer.play(
-        UrlSource(
-          'https://cdn.freesound.org/previews/450/450974_9067471-lq.mp3',
-        ),
-      );
-      debugPrint('🔊 Playing: Imperial March');
-    } catch (e) {
-      // Silent fallback
+    if (kIsWeb) {
+      WebSynth.startImperialMarch();
     }
   }
 

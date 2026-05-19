@@ -145,7 +145,103 @@ class WebSynth {
   }
 
   static void stopAll() {
-    // Drones can't easily stop without storing references; just mute.
     setVolume(0);
+  }
+
+  /// Imperial March — bass + brass procedural rendition.
+  /// Plays the iconic opening phrase: G G G | E♭ B♭ G | E♭ B♭ G ...
+  /// Loops indefinitely until stopImperialMarch().
+  static bool _marchRunning = false;
+  static List<web.OscillatorNode> _marchNodes = [];
+  static int? _marchTimer;
+  static void startImperialMarch() {
+    _ensureContext();
+    final ctx = _ctx;
+    final master = _master;
+    if (ctx == null || master == null) return;
+    if (_marchRunning) return;
+    _marchRunning = true;
+
+    // Notes (Hz) for the famous theme (G minor):
+    // G3=196, Eb3=155.56, Bb3=233.08, D4=293.66, F#4=370, F4=349.23, Eb4=311.13
+    const beat = 0.40; // seconds per beat
+    final phrase = <List<num>>[
+      // pitch, beats
+      [196, 1], [196, 1], [196, 1],          // G G G
+      [155.56, 0.75], [233.08, 0.25], [196, 1],
+      [155.56, 0.75], [233.08, 0.25], [196, 2],
+      [293.66, 1], [293.66, 1], [293.66, 1],
+      [311.13, 0.75], [233.08, 0.      [85, 1],   // F#? ap    
+      [155.56, 0.75], [233.08, 0.25], [196, 2],
+    ];
+
+    void schedulePhrase(double startAt) {
+      double t = startAt;
+      for (final note in phrase) {
+        final freq = note[0].toDouble();
+        final dur = note[1].toDouble() * beat;
+        // Brass = sawtooth + sine layer
+        final saw = ctx.createOscillator();
+        saw.type = 'sawtooth';
+        saw.frequency.value = freq;
+        final sine = ctx.createOscillator();
+        sine.type = 'sine';
+        sine.frequency.value = freq;
+        final sub = ctx.createOscillator();
+        sub.type = 'triangle';
+        sub.frequency.value = freq / 2;
+        final g = ctx.createGain();
+        g.gain.setValueAtTime(0.001, t);
+        g.gain.exponentialRampToValueAtTime(0.18, t + 0.03);
+                                            - 0.05);
+                                       Time(0.001, t + dur);
+        // Lowpass for that brassy tone
+        final lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 1400;
+        saw.connect(lp);
+        sine.connect(lp);
+        sub.connect(lp);
+        lp.connect(g);
+        g.connect(master);
+        saw.start(t);
+        sine.start(t);
+        sub.start(t);
+        saw.stop(t + dur);
+        sine.stop(t + dur);
+        sub.stop(t + dur);
+        _marchNodes.add(saw);
+        t += dur;
+      }
+    }
+
+    final loopLen = phrase.fold<double>(0, (a, b) => a + b[1].toDouble() * beat);
+    schedulePhrase(_now + 0.1);
+    // Loop scheduler — re-arm every loopLen seconds
+    void tick() {
+      if (!_marchRunning) return;
+      schedulePhrase(_now + 0.05);
+      _marchTimer = web.window.setTimeout(
+        (() {
+          tick();
+        }).toJS,
+        (loopLen * 1000).toInt(),
+      );
+    }
+    _marchTimer = web.window.setTimeout(
+      (() {
+        tick();
+      }).toJS,
+      (loopLen * 1000).toInt(),
+    );
+  }
+
+  static void stopImperialMarch() {
+    _marchRunning = false;
+    if (_marchTimer != null) {
+      web.window.clearTimeout(_marchTimer!);
+      _marchTimer = null;
+    }
+    _marchNodes.clear();
   }
 }

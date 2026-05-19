@@ -113,6 +113,8 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _bootstrapPlans();
     // Free ambient space sound (freesound.org CDN, no key required).
     StarWarsSounds.playAmbientSpace();
+    // Procedural Imperial March loop kicks in shortly after user clicks.
+    StarWarsSounds.playImperialMarch();
   }
 
   Future<void> _bootstrapPlans() async {
@@ -338,28 +340,21 @@ class _CoruscantSceneState extends State<CoruscantScene>
                   ),
                 ),
               ),
-              _Hud(fps: _fps, liveAi: _liveAi, ships: _world.ships.length, rebelScore: _world.rebelScore, imperialScore: _world.imperialScore),
-              _CodexPanel(
-                planet: _focusPlanet,
-                ship: _focusShip,
-                person: _focusPerson,
-                vehicle: _focusVehicle,
+              // Minimal top-bar: faction score only. All chat/codex/memory
+              // panels removed — only the per-character action bubbles
+              // (drawn directly on the canvas above each walker) remain.
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      _ScoreChip(label: 'REBELS', value: _world.rebelScore, color: const Color(0xFF26F0F0)),
+                      const SizedBox(width: 8),
+                      _ScoreChip(label: 'EMPIRE', value: _world.imperialScore, color: const Color(0xFFFF3158)),
+                    ],
+                  ),
+                ),
               ),
-              _AgentTheater(
-                personas: _personas,
-                turns: _agentTurns,
-                liveAi: _liveAi,
-              ),
-              _MemoryStreamPanel(
-                focus: _focusAgent,
-                personas: _personas,
-                stream: _memories[_focusAgent],
-                reflection: _reflections[_focusAgent],
-                plan: _plans[_focusAgent],
-                trust: _trustGraph[_focusAgent] ?? const {},
-                onSelect: (n) => setState(() => _focusAgent = n),
-              ),
-              _NewsTicker(messages: _bulletins, current: _tickerIdx, liveAi: _liveAi),
             ],
           );
         },
@@ -386,6 +381,7 @@ class _World {
   final List<_Hologram> holos = [];
   final List<_Walker> walkers = [];
   final List<_Bolt> bolts = [];
+  final List<_Fighter> fighters = [];
 
   // Combat HUD state
   int rebelScore = 0;
@@ -515,6 +511,27 @@ class _World {
         hasSaber: true,
       ),
     ]);
+
+    // Sky dogfight — 4 X-wings vs 4 TIEs at high altitude.
+    fighters.clear();
+    for (var i = 0; i < 4; i++) {
+      fighters.add(_Fighter(
+        kind: 'xwing',
+        faction: 'Rebel',
+        x: 40.0 + i * 90,
+        y: h * 0.18 + (i % 2) * 30,
+        vx: 60 + i * 10.0,
+        vy: 0,
+      ));
+      fighters.add(_Fighter(
+        kind: 'tie',
+        faction: 'Empire',
+        x: w - 40 - i * 90,
+        y: h * 0.22 + (i % 2) * 30,
+        vx: -55 - i * 10.0,
+        vy: 0,
+      ));
+    }
   }
 
   _ShipKind _kindFor(int i) {
@@ -681,6 +698,91 @@ class _World {
     } else {
       shakeX = 0; shakeY = 0;
     }
+
+    // ----- DOGFIGHT: starfighter AI + steering + firing -----
+    for (final f in fighters) {
+      if (!f.alive) continue;
+      // Find nearest enemy
+      _Fighter? target;
+      double bestD = double.infinity;
+      for (final o in fighters) {
+        if (o == f || !o.alive || o.faction == f.faction) continue;
+        final d = (o.x - f.x).abs() + (o.y - f.y).abs();
+        if (d < bestD) { bestD = d; target = o; }
+      }
+      if (target != null) {
+        final dx = target.x - f.x;
+        final dy = target.y - f.y;
+        final dist = sqrt(dx * dx + dy * dy).clamp(1, double.infinity);
+        // Steer toward target
+        final desiredVx = dx / dist * 110;
+        final desiredVy = dy / dist * 70;
+        f.vx += (desiredVx - f.vx) * dt * 0.8;
+        f.vy += (desiredVy - f.vy) * dt * 0.8;
+        // Fire when reasonably close + aligned
+        if (f.fireCooldown <= 0 && dist < 420) {
+          f.fireCooldown = 0.7 + _combatRand.nextDouble() * 0.6;
+          f.muzzle = 1.0;
+          final color = f.faction == 'Rebel'
+              ? const Color(0xFFFF3158)
+              : const Color(0xFF3FB8FF);
+          bolts.add(_Bolt(
+            x: f.x + (f.vx > 0 ? 14 : -14),
+            y: f.y,
+            vx: dx / dist * 560 + f.vx * 0.3,
+            vy: dy / dist * 560 + f.vy * 0.3,
+            color: color,
+            fromFaction: f.faction,
+          ));
+          if (_combatRand.nextDouble() < 0.25) StarWarsSounds.blasterFire();
+        }
+      }
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      // Keep within sky band
+      if (f.y < h * 0.06) { f.y = h * 0.06; f.vy = f.vy.abs(); }
+      if (f.y > h * 0.42) { f.y = h * 0.42; f.vy = -f.vy.abs(); }
+      if (f.x < -40) f.x = w + 40;
+      if (f.x > w + 40) f.x = -40;
+      if (f.fireCooldown > 0) f.fireCooldown -= dt;
+      if (f.hitFlash > 0) f.hitFlash = max(0, f.hitFlash - dt * 2.5);
+      if (f.muzzle > 0) f.muzzle = max(0, f.muzzle - dt * 5);
+    }
+
+    // Bolt vs fighter collisions (bolts already moved above)
+    for (final b in bolts) {
+      if (!b.alive) continue;
+      for (final f in fighters) {
+        if (!f.alive || f.faction == b.fromFaction) continue;
+        final dx = f.x - b.x;
+        final dy = f.y - b.y;
+        if (dx * dx + dy * dy < 16 * 16) {
+          b.alive = false;
+          f.hp -= 14;
+          f.hitFlash = 1.0;
+          shake = (shake + 0.4).clamp(0, 1.6);
+          if (f.hp <= 0) {
+            if (b.fromFaction == 'Rebel') rebelScore++;
+            else imperialScore++;
+            StarWarsSounds.explosion();
+          }
+          break;
+        }
+      }
+    }
+    bolts.removeWhere((b) => !b.alive);
+
+    // Respawn dead fighters at edge after a beat
+    for (final f in fighters) {
+      if (!f.alive) {
+        f.hp = f.maxHp;
+        f.x = f.faction == 'Rebel' ? -40 : w + 40;
+        f.y = h * 0.15 + _combatRand.nextDouble() * h * 0.20;
+        f.vx = f.faction == 'Rebel' ? 60 : -60;
+        f.vy = 0;
+        f.hitFlash = 0;
+      }
+    }
   }
 
   /// Mirror an LLM agent's latest action onto its matching ground walker
@@ -805,6 +907,32 @@ class _Bolt {
   bool alive;
   final Color color;
   final String fromFaction;
+}
+
+/// Sky starfighter — X-wing (Rebel) or TIE (Empire). Dogfight: each
+/// fighter steers toward the nearest enemy and fires when in range.
+class _Fighter {
+  _Fighter({
+    required this.kind,
+    required this.faction,
+    required this.x,
+    required this.y,
+    required this.vx,
+    required this.vy,
+  })  : hp = 60,
+        maxHp = 60,
+        fireCooldown = 0,
+        hitFlash = 0,
+        muzzle = 0;
+  final String kind; // 'xwing' | 'tie'
+  final String faction;
+  double x, y, vx, vy;
+  double hp;
+  final double maxHp;
+  double fireCooldown;
+  double hitFlash;
+  double muzzle;
+  bool get alive => hp > 0;
 }
 
 // =====================================================================
@@ -1372,6 +1500,41 @@ class _Hud extends StatelessWidget {
           fontWeight: FontWeight.w800,
           letterSpacing: 1.0,
         ),
+      ),
+    );
+  }
+}
+
+class _ScoreChip extends StatelessWidget {
+  const _ScoreChip({required this.label, required this.value, required this.color});
+  final String label;
+  final int value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.7), width: 1.0),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7, height: 7,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(color: color, fontSize: 10, letterSpacing: 1.6, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(width: 8),
+          Text('$value', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900)),
+        ],
       ),
     );
   }
@@ -2202,6 +2365,7 @@ class _BoganoPainter extends CustomPainter {
     _drawForceEchoes(canvas);
     _drawRuins(canvas, world.fgBuildings, 1.0);
     _drawFireflies(canvas);
+    _drawFighters(canvas);
     _drawGround(canvas, size);
     _drawWalkers(canvas);
     _drawBolts(canvas);
@@ -2210,9 +2374,137 @@ class _BoganoPainter extends CustomPainter {
     canvas.restore();
   }
 
+  void _drawFighters(Canvas canvas) {
+    for (final f in world.fighters) {
+      if (f.kind == 'xwing') {
+        _drawXwing(canvas, f);
+      } else {
+        _drawTie(canvas, f);
+      }
+      // HP bar
+      const barW = 26.0;
+      final by = f.y - 18;
+      _p
+        ..color = Colors.black.withValues(alpha: 0.55)
+        ..style = PaintingStyle.fill;
+      canvas.drawRect(Rect.fromLTWH(f.x - barW / 2, by, barW, 2.6), _p);
+      _p.color = f.faction == 'Rebel' ? const Color(0xFF26F0F0) : const Color(0xFFFF3158);
+      canvas.drawRect(
+        Rect.fromLTWH(f.x - barW / 2, by, barW * (f.hp / f.maxHp).clamp(0.0, 1.0), 2.6),
+        _p,
+      );
+      // Hit flash
+      if (f.hitFlash > 0) {
+        _glow
+          ..shader = RadialGradient(
+            colors: [Colors.white.withValues(alpha: 0.8 * f.hitFlash), Colors.white.withValues(alpha: 0)],
+          ).createShader(Rect.fromCircle(center: Offset(f.x, f.y), radius: 22))
+          ..blendMode = BlendMode.plus;
+        canvas.drawCircle(Offset(f.x, f.y), 22, _glow);
+        _glow
+          ..shader = null
+          ..blendMode = BlendMode.srcOver;
+      }
+    }
+  }
+
+  void _drawXwing(Canvas canvas, _Fighter f) {
+    final dir = f.vx >= 0 ? 1 : -1;
+    final cx = f.x, cy = f.y;
+    // Engine glow / thruster trail
+    _glow
+      ..shader = RadialGradient(
+        colors: [const Color(0xFFFF6A2A).withValues(alpha: 0.7), const Color(0xFFFF6A2A).withValues(alpha: 0)],
+      ).createShader(Rect.fromCircle(center: Offset(cx - dir * 16, cy), radius: 12))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(Offset(cx - dir * 16, cy), 12, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+
+    // Body fuselage (long taper)
+    _p
+      ..color = const Color(0xFFC8CDD4)
+      ..style = PaintingStyle.fill;
+    final body = Path()
+      ..moveTo(cx + dir * 18, cy)
+      ..lineTo(cx - dir * 14, cy - 3)
+      ..lineTo(cx - dir * 14, cy + 3)
+      ..close();
+    canvas.drawPath(body, _p);
+    // Cockpit
+    _p.color = const Color(0xFF22303C);
+    canvas.drawCircle(Offset(cx + dir * 4, cy - 2), 3, _p);
+    // S-foils (X pattern wings)
+    _p
+      ..color = const Color(0xFFB0B7BF)
+      ..strokeWidth = 2.6
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(cx - dir * 6, cy - 6), Offset(cx - dir * 14, cy - 12), _p);
+    canvas.drawLine(Offset(cx - dir * 6, cy + 6), Offset(cx - dir * 14, cy + 12), _p);
+    canvas.drawLine(Offset(cx - dir * 6, cy - 6), Offset(cx - dir * 2, cy - 12), _p);
+    canvas.drawLine(Offset(cx - dir * 6, cy + 6), Offset(cx - dir * 2, cy + 12), _p);
+    // Wing tip cannons (red)
+    _p
+      ..color = const Color(0xFFFF3158)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(Offset(cx - dir * 14, cy - 12), Offset(cx + dir * 6, cy - 12), _p);
+    canvas.drawLine(Offset(cx - dir * 14, cy + 12), Offset(cx + dir * 6, cy + 12), _p);
+    _p.style = PaintingStyle.fill;
+    // Muzzle flash on cannons
+    if (f.muzzle > 0) {
+      _p.color = const Color(0xFFFFE08A).withValues(alpha: f.muzzle);
+      canvas.drawCircle(Offset(cx + dir * 6, cy - 12), 2.4, _p);
+      canvas.drawCircle(Offset(cx + dir * 6, cy + 12), 2.4, _p);
+    }
+  }
+
+  void _drawTie(Canvas canvas, _Fighter f) {
+    final cx = f.x, cy = f.y;
+    final dir = f.vx >= 0 ? 1 : -1;
+    // Twin hexagonal solar panels
+    _p
+      ..color = const Color(0xFF1E1E22)
+      ..style = PaintingStyle.fill;
+    final panel = (double pyCenter) {
+      final path = Path()
+        ..moveTo(cx, pyCenter)
+        ..lineTo(cx + 7, pyCenter - 11)
+        ..lineTo(cx + 7, pyCenter + 11)
+        ..close();
+      final p2 = Path()
+        ..moveTo(cx, pyCenter)
+        ..lineTo(cx - 7, pyCenter - 11)
+        ..lineTo(cx - 7, pyCenter + 11)
+        ..close();
+      canvas.drawPath(path, _p);
+      canvas.drawPath(p2, _p);
+    };
+    panel(cy - 11);
+    panel(cy + 11);
+    // Panel outlines
+    _p
+      ..color = const Color(0xFF55606A)
+      ..strokeWidth = 1.1
+      ..style = PaintingStyle.stroke;
+    canvas.drawRect(Rect.fromLTWH(cx - 7, cy - 22, 14, 22), _p);
+    canvas.drawRect(Rect.fromLTWH(cx - 7, cy, 14, 22), _p);
+    canvas.drawLine(Offset(cx - 7, cy), Offset(cx + 7, cy), _p);
+    // Center cockpit sphere
+    _p
+      ..color = const Color(0xFF2A2F36)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(cx, cy), 6, _p);
+    _p.color = const Color(0xFF14181D);
+    canvas.drawCircle(Offset(cx, cy), 3.4, _p);
+    // Vader-red gun glow
+    if (f.muzzle > 0) {
+      _p.color = const Color(0xFF3FB8FF).withValues(alpha: f.muzzle);
+      canvas.drawCircle(Offset(cx + dir * 6, cy), 2.6, _p);
+    }
+  }
+
   void _drawBolts(Canvas canvas) {
     for (final b in world.bolts) {
-      // glow halo
       _glow
         ..shader = RadialGradient(
           colors: [b.color.withValues(alpha: 0.55), b.color.withValues(alpha: 0)],
@@ -2589,6 +2881,7 @@ class _BoganoPainter extends CustomPainter {
     );
     // head
     canvas.drawCircle(Offset(cx, headY), headR, body);
+    _drawCharacterHead(canvas, w, cx, headY, headR);
     // arms
     _p
       ..color = w.bodyColor
@@ -2794,6 +3087,178 @@ class _BoganoPainter extends CustomPainter {
         ..close();
       _p.color = Colors.black.withValues(alpha: 0.75);
       canvas.drawPath(tail, _p);
+    }
+  }
+
+  /// Per-character cosmetic features (helmets, hair, capes) so each
+  /// walker actually looks like the Star Wars character they represent.
+  void _drawCharacterHead(Canvas canvas, _Walker w, double cx, double headY, double headR) {
+    final s = w.scale;
+    switch (w.name) {
+      case 'VADER':
+        // Black helmet dome + flared neck + chest panel
+        _p
+          ..color = const Color(0xFF050505)
+          ..style = PaintingStyle.fill;
+        // Helmet (taller dome)
+        canvas.drawCircle(Offset(cx, headY - 1), headR + 1.5, _p);
+        // Helmet ear-flares
+        _p.color = const Color(0xFF1A1A1A);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(cx - headR - 2.5, headY - 0.5, 2.2, 4.5),
+            const Radius.circular(1),
+          ),
+          _p,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(cx + headR + 0.3, headY - 0.5, 2.2, 4.5),
+            const Radius.circular(1),
+          ),
+          _p,
+        );
+        // Triangular eye slits (red glow)
+        _p.color = const Color(0xFFFF1A1A);
+        canvas.drawRect(Rect.fromLTWH(cx - 2.6, headY - 1, 1.8, 1.2), _p);
+        canvas.drawRect(Rect.fromLTWH(cx + 0.8, headY - 1, 1.8, 1.2), _p);
+        // Chest control box (red + green LEDs)
+        final boxTop = headY + headR + 6 * s;
+        _p.color = const Color(0xFF1A1A1A);
+        canvas.drawRect(Rect.fromLTWH(cx - 4 * s, boxTop, 8 * s, 4 * s), _p);
+        _p.color = const Color(0xFFFF3158);
+        canvas.drawCircle(Offset(cx - 2 * s, boxTop + 2 * s), 0.8, _p);
+        _p.color = const Color(0xFF26F0F0);
+        canvas.drawCircle(Offset(cx + 1.5 * s, boxTop + 2 * s), 0.7, _p);
+        // Long cape
+        _p.color = const Color(0xFF050505);
+        final cape = Path()
+          ..moveTo(cx - headR, headY + headR)
+          ..lineTo(cx + headR, headY + headR)
+          ..lineTo(cx + 11 * s, headY + 38 * s)
+          ..lineTo(cx - 11 * s, headY + 38 * s)
+          ..close();
+        canvas.drawPath(cape, _p);
+        break;
+
+      case 'BOBA':
+        // Mandalorian helmet — green w/ T-visor
+        _p
+          ..color = const Color(0xFF4A6B3A)
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(Offset(cx, headY), headR + 1, _p);
+        // Dent stripes
+        _p.color = const Color(0xFF7A2A1F);
+        canvas.drawRect(Rect.fromLTWH(cx - 1, headY - headR + 0.5, 2, 1.5), _p);
+        // T-visor
+        _p.color = const Color(0xFF080808);
+        final visor = Path()
+          ..moveTo(cx - headR + 0.6, headY - 0.5)
+          ..lineTo(cx + headR - 0.6, headY - 0.5)
+          ..lineTo(cx + headR - 0.6, headY + 0.6)
+          ..lineTo(cx + 0.9, headY + 0.6)
+          ..lineTo(cx + 0.9, headY + 2.4)
+          ..lineTo(cx - 0.9, headY + 2.4)
+          ..lineTo(cx - 0.9, headY + 0.6)
+          ..lineTo(cx - headR + 0.6, headY + 0.6)
+          ..close();
+        canvas.drawPath(visor, _p);
+        // Range-finder antenna
+        _p.color = const Color(0xFF202020);
+        canvas.drawRect(Rect.fromLTWH(cx + headR - 0.5, headY - headR - 3, 1.0, 4.0), _p);
+        // Jetpack on back
+        _p.color = const Color(0xFF2C3835);
+        final jpY = headY + headR + 2;
+        canvas.drawRect(Rect.fromLTWH(cx - 4 * s, jpY, 8 * s, 12 * s), _p);
+        _p.color = const Color(0xFFFF8A4C);
+        canvas.drawCircle(Offset(cx - 2.2 * s, jpY + 12 * s), 1.4, _p);
+        canvas.drawCircle(Offset(cx + 2.2 * s, jpY + 12 * s), 1.4, _p);
+        break;
+
+      case 'LEIA':
+        // Iconic side-bun hair
+        _p
+          ..color = const Color(0xFF3A2418)
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(Offset(cx - headR - 0.6, headY + 0.5), 2.6, _p);
+        canvas.drawCircle(Offset(cx + headR + 0.6, headY + 0.5), 2.6, _p);
+        // Hair top
+        canvas.drawArc(
+          Rect.fromCircle(center: Offset(cx, headY), radius: headR + 0.5),
+          pi, pi, true, _p,
+        );
+        // White senatorial robe
+        _p.color = const Color(0xFFEFEFEF);
+        final robe = Path()
+          ..moveTo(cx - 6 * s, headY + headR + 1)
+          ..lineTo(cx + 6 * s, headY + headR + 1)
+          ..lineTo(cx + 9 * s, headY + 30 * s)
+          ..lineTo(cx - 9 * s, headY + 30 * s)
+          ..close();
+        canvas.drawPath(robe, _p);
+        break;
+
+      case 'HAN':
+        // Brown wavy hair
+        _p
+          ..color = const Color(0xFF3A2014)
+          ..style = PaintingStyle.fill;
+        canvas.drawArc(
+          Rect.fromCircle(center: Offset(cx, headY - 0.5), radius: headR + 0.8),
+          pi, pi, true, _p,
+        );
+        // Cocky smirk hint
+        _p.color = const Color(0xFFE0B796);
+        canvas.drawCircle(Offset(cx, headY + 0.3), headR - 0.4, _p);
+        _p.color = const Color(0xFF202020);
+        canvas.drawCircle(Offset(cx - 1.4, headY - 0.2), 0.5, _p);
+        canvas.drawCircle(Offset(cx + 1.4, headY - 0.2), 0.5, _p);
+        // Blue Rebel jacket (vest stripe)
+        _p.color = const Color(0xFF1E2A38);
+        canvas.drawRect(
+          Rect.fromLTWH(cx - 5 * s, headY + headR + 0.5, 10 * s, 8 * s),
+          _p,
+        );
+        // Yellow Corellian bloodstripe on pants
+        _p.color = const Color(0xFFFFD46B);
+        canvas.drawRect(Rect.fromLTWH(cx - 0.5, headY + 22 * s, 1.0, 12 * s), _p);
+        // Blaster holster
+        _p.color = const Color(0xFF0E0E10);
+        canvas.drawCircle(Offset(cx + (w.dir > 0 ? 6 * s : -6 * s), headY + 18 * s), 2.2, _p);
+        break;
+
+      case 'CAL':
+        // Tousled red-brown hair
+        _p
+          ..color = const Color(0xFF6A2A1A)
+          ..style = PaintingStyle.fill;
+        canvas.drawArc(
+          Rect.fromCircle(center: Offset(cx, headY - 1), radius: headR + 0.6),
+          pi + 0.3, pi - 0.6, true, _p,
+        );
+        // Face tone
+        _p.color = const Color(0xFFE7BC9B);
+        canvas.drawCircle(Offset(cx, headY + 0.4), headR - 0.5, _p);
+        _p.color = const Color(0xFF1A1A1A);
+        canvas.drawCircle(Offset(cx - 1.4, headY - 0.2), 0.5, _p);
+        canvas.drawCircle(Offset(cx + 1.4, headY - 0.2), 0.5, _p);
+        // Jedi poncho (orange-brown)
+        _p.color = const Color(0xFF7A4B2A);
+        final pcho = Path()
+          ..moveTo(cx - 8 * s, headY + headR + 1)
+          ..lineTo(cx + 8 * s, headY + headR + 1)
+          ..lineTo(cx + 11 * s, headY + 28 * s)
+          ..lineTo(cx - 11 * s, headY + 28 * s)
+          ..close();
+        canvas.drawPath(pcho, _p);
+        // BD-1 droid on shoulder (cyan eye + white body)
+        final bdX = cx - (w.dir > 0 ? 6 * s : -6 * s);
+        final bdY = headY + 2;
+        _p.color = const Color(0xFFE8E8E8);
+        canvas.drawCircle(Offset(bdX, bdY), 2.4, _p);
+        _p.color = const Color(0xFF26F0F0);
+        canvas.drawCircle(Offset(bdX, bdY - 0.5), 0.9, _p);
+        break;
     }
   }
 
