@@ -372,6 +372,7 @@ class _World {
   final List<_Building> fgBuildings = [];
   final List<_Ship> ships = [];
   final List<_Hologram> holos = [];
+  final List<_Walker> walkers = [];
 
   // Animated globals
   double t = 0;
@@ -394,6 +395,7 @@ class _World {
     fgBuildings.clear();
     ships.clear();
     holos.clear();
+    walkers.clear();
 
     // Starfield
     for (var i = 0; i < 220; i++) {
@@ -434,6 +436,35 @@ class _World {
         scale: 0.6 + _rand.nextDouble() * 0.9,
       ));
     }
+
+    // Ground walkers (Jedi + companions).
+    final gy = h * 0.80;
+    walkers.addAll([
+      _Walker(
+        name: 'CAL',
+        x: w * 0.30, y: gy, dir: 1,
+        speed: 22, scale: 1.0,
+        bodyColor: const Color(0xFF7A4B2A),
+        accentColor: const Color(0xFF3FB8FF),   // blue saber
+        hasSaber: true,
+      ),
+      _Walker(
+        name: 'MERRIN',
+        x: w * 0.55, y: gy, dir: -1,
+        speed: 18, scale: 0.95,
+        bodyColor: const Color(0xFF2A1E1E),
+        accentColor: const Color(0xFF8FE3A3),   // nightsister green
+        hasSaber: false,
+      ),
+      _Walker(
+        name: 'GREEZ',
+        x: w * 0.78, y: gy, dir: 1,
+        speed: 14, scale: 0.85,
+        bodyColor: const Color(0xFF3A2C20),
+        accentColor: const Color(0xFFFF8A4C),
+        hasSaber: false,
+      ),
+    ]);
   }
 
   _ShipKind _kindFor(int i) {
@@ -492,6 +523,13 @@ class _World {
     for (final hg in holos) {
       hg.phase += dt;
     }
+    for (final wkr in walkers) {
+      wkr.x += wkr.speed * wkr.dir * dt;
+      wkr.gait += dt * 6.0;
+      // bounce off edges
+      if (wkr.x < 30) { wkr.x = 30; wkr.dir = 1; }
+      if (wkr.x > w - 30) { wkr.x = w - 30; wkr.dir = -1; }
+    }
   }
 }
 
@@ -543,6 +581,27 @@ class _Ship {
 }
 
 enum _Palette { bg, mid, fg }
+
+class _Walker {
+  _Walker({
+    required this.name,
+    required this.x,
+    required this.y,
+    required this.dir,
+    required this.speed,
+    required this.scale,
+    required this.bodyColor,
+    required this.accentColor,
+    required this.hasSaber,
+  }) : gait = 0;
+  final String name;
+  double x, y, gait;
+  int dir;
+  final double speed, scale;
+  final Color bodyColor;
+  final Color accentColor;
+  final bool hasSaber;
+}
 
 // =====================================================================
 // PAINTER
@@ -1053,7 +1112,7 @@ class _Hud extends StatelessWidget {
                   _chip('$ships motes', const Color(0xFFFF8A4C)),
                   const SizedBox(width: 6),
                   _chip(
-                    liveAi ? 'COHERE · LIVE' : 'COHERE · OFFLINE',
+                    liveAi ? 'LIVE TRANSMISSION' : 'STANDBY',
                     liveAi
                         ? const Color(0xFF7C5CFF)
                         : const Color(0xFF6B7184),
@@ -1176,7 +1235,7 @@ class _NewsTicker extends StatelessWidget {
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      liveAi ? 'COHERE · HOLO-NEWS' : 'HOLO-NEWS',
+                      liveAi ? 'HOLONET BULLETIN' : 'HOLONET BULLETIN',
                       style: TextStyle(
                         color: liveAi
                             ? const Color(0xFF7C5CFF)
@@ -1267,7 +1326,7 @@ class _AgentTheater extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    liveAi ? 'COHERE \u00b7 AGENT THEATER' : 'AGENT THEATER \u00b7 CANNED',
+                    liveAi ? 'AGENT TRANSMISSIONS' : 'AGENT TRANSMISSIONS',
                     style: const TextStyle(
                       color: Color(0xFF26F0F0),
                       fontSize: 10,
@@ -1496,7 +1555,7 @@ class _CodexPanel extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   const Text(
-                    'SWAPI \u00b7 GALACTIC CODEX',
+                    'GALACTIC CODEX',
                     style: TextStyle(
                       color: Color(0xFFFFB347),
                       fontSize: 10,
@@ -1693,7 +1752,7 @@ class _MemoryStreamPanel extends StatelessWidget {
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
-                      'SMALLVILLE \u00b7 MEMORY STREAM',
+                      'AGENT DOSSIER',
                       style: TextStyle(
                         color: Color(0xFF7C5CFF),
                         fontSize: 10,
@@ -1917,6 +1976,7 @@ class _BoganoPainter extends CustomPainter {
     _drawRuins(canvas, world.fgBuildings, 1.0);
     _drawFireflies(canvas);
     _drawGround(canvas, size);
+    _drawWalkers(canvas);
     _drawVignette(canvas, size);
     _drawFilmGrain(canvas, size);
   }
@@ -2224,6 +2284,154 @@ class _BoganoPainter extends CustomPainter {
         _p,
       );
     }
+  }
+
+  void _drawWalkers(Canvas canvas) {
+    for (final w in world.walkers) {
+      _drawWalker(canvas, w);
+    }
+  }
+
+  void _drawWalker(Canvas canvas, _Walker w) {
+    final s = w.scale;
+    final cx = w.x;
+    final feetY = w.y;
+    final headR = 4.5 * s;
+    final torsoTop = feetY - 36 * s;
+    final torsoBot = feetY - 16 * s;
+    final headY = torsoTop - headR;
+
+    // Walk gait — sinusoidal limbs.
+    final leg = sin(w.gait) * 6 * s;
+    final arm = sin(w.gait + pi) * 6 * s;
+
+    // Long shadow on the ground.
+    _p
+      ..shader = null
+      ..color = Colors.black.withValues(alpha: 0.45)
+      ..style = PaintingStyle.fill;
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset(cx, feetY + 3), width: 22 * s, height: 5 * s),
+      _p,
+    );
+
+    // Body silhouette
+    final body = Paint()
+      ..color = w.bodyColor
+      ..style = PaintingStyle.fill;
+    // torso
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTRB(cx - 5 * s, torsoTop, cx + 5 * s, torsoBot),
+        Radius.circular(2 * s),
+      ),
+      body,
+    );
+    // head
+    canvas.drawCircle(Offset(cx, headY), headR, body);
+    // arms
+    _p
+      ..color = w.bodyColor
+      ..strokeWidth = 2.2 * s
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(cx - 4 * s, torsoTop + 2), Offset(cx - 7 * s, torsoTop + 14 * s + arm), _p);
+    canvas.drawLine(Offset(cx + 4 * s, torsoTop + 2), Offset(cx + 7 * s, torsoTop + 14 * s - arm), _p);
+    // legs
+    canvas.drawLine(Offset(cx - 2 * s, torsoBot), Offset(cx - 3 * s, feetY + leg.abs() * 0.0), _p);
+    canvas.drawLine(Offset(cx + 2 * s, torsoBot), Offset(cx + 3 * s, feetY - leg.abs() * 0.0), _p);
+    canvas.drawLine(Offset(cx - 2 * s, torsoBot), Offset(cx - 3 * s + leg * 0.4, feetY), _p);
+    canvas.drawLine(Offset(cx + 2 * s, torsoBot), Offset(cx + 3 * s - leg * 0.4, feetY), _p);
+
+    // Cloak/poncho rim light
+    _p
+      ..style = PaintingStyle.fill
+      ..color = _rimOrange.withValues(alpha: 0.45);
+    final cloak = Path()
+      ..moveTo(cx - 6 * s, torsoTop + 4)
+      ..lineTo(cx + 6 * s, torsoTop + 4)
+      ..lineTo(cx + 8 * s, torsoBot + 2 * s)
+      ..lineTo(cx - 8 * s, torsoBot + 2 * s)
+      ..close();
+    canvas.drawPath(cloak, _p);
+
+    // Lightsaber for Cal
+    if (w.hasSaber) {
+      final hiltX = cx + (w.dir > 0 ? 8 * s : -8 * s);
+      final hiltY = torsoTop + 18 * s;
+      final tipX = hiltX + (w.dir > 0 ? 26 * s : -26 * s);
+      final tipY = hiltY - 22 * s;
+
+      // Glow halo
+      _glow
+        ..shader = RadialGradient(
+          colors: [
+            w.accentColor.withValues(alpha: 0.7),
+            w.accentColor.withValues(alpha: 0.0),
+          ],
+        ).createShader(
+            Rect.fromCircle(center: Offset((hiltX + tipX) / 2, (hiltY + tipY) / 2), radius: 28 * s))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(
+        Offset((hiltX + tipX) / 2, (hiltY + tipY) / 2),
+        28 * s,
+        _glow,
+      );
+      _glow
+        ..shader = null
+        ..blendMode = BlendMode.srcOver;
+
+      // Outer blade
+      _p
+        ..color = w.accentColor.withValues(alpha: 0.55)
+        ..strokeWidth = 6 * s
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(hiltX, hiltY), Offset(tipX, tipY), _p);
+      // Inner white core
+      _p
+        ..color = Colors.white.withValues(alpha: 0.95)
+        ..strokeWidth = 2.4 * s;
+      canvas.drawLine(Offset(hiltX, hiltY), Offset(tipX, tipY), _p);
+
+      // Hilt
+      _p
+        ..color = const Color(0xFF2A2A2A)
+        ..strokeWidth = 4 * s
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.butt;
+      canvas.drawLine(
+        Offset(hiltX, hiltY),
+        Offset(hiltX - (w.dir > 0 ? 6 * s : -6 * s), hiltY + 4 * s),
+        _p,
+      );
+    }
+
+    // Name tag floating above
+    final tp = TextPainter(
+      text: TextSpan(
+        text: w.name,
+        style: TextStyle(
+          color: w.accentColor.withValues(alpha: 0.95),
+          fontSize: 9,
+          letterSpacing: 1.5,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(cx - tp.width / 2, headY - 18));
+    // Tag underline
+    _p
+      ..color = w.accentColor.withValues(alpha: 0.6)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(
+      Offset(cx - tp.width / 2 - 2, headY - 6),
+      Offset(cx + tp.width / 2 + 2, headY - 6),
+      _p,
+    );
+    _p.style = PaintingStyle.fill;
   }
 
   @override

@@ -51,7 +51,7 @@ class CohereClient {
           )
           .timeout(const Duration(seconds: 20));
       if (res.statusCode >= 400) {
-        debugPrint('Cohere ${res.statusCode}: ${res.body}');
+        // debugPrint('Cohere ${res.statusCode}: ${res.body}');
         return _fallback();
       }
       final json = jsonDecode(res.body) as Map<String, dynamic>;
@@ -59,7 +59,7 @@ class CohereClient {
       if (text.isEmpty) return _fallback();
       return text.replaceAll('"', '').split('\n').first.trim();
     } catch (e) {
-      debugPrint('Cohere error: $e');
+      // debugPrint('Cohere error: $e');
       return _fallback();
     }
   }
@@ -114,7 +114,7 @@ class CohereClient {
           .timeout(const Duration(seconds: 25));
 
       if (res.statusCode >= 400) {
-        debugPrint('Cohere agentTurn ${res.statusCode}: ${res.body}');
+        // debugPrint('Cohere agentTurn ${res.statusCode}: ${res.body}');
         return _fallbackTurn(agentName, nearbyCharacters);
       }
       final outer = jsonDecode(res.body) as Map<String, dynamic>;
@@ -123,7 +123,7 @@ class CohereClient {
       final parsed = jsonDecode(cleaned) as Map<String, dynamic>;
       return AgentTurn.fromJson(parsed, fallbackAgent: agentName);
     } catch (e) {
-      debugPrint('Cohere agentTurn error: $e');
+      // debugPrint('Cohere agentTurn error: $e');
       return _fallbackTurn(agentName, nearbyCharacters);
     }
   }
@@ -279,7 +279,7 @@ Respond ONLY with a single JSON object matching this schema. No prose, no code f
       if (text.isEmpty) return _fallbackReflection(agentName);
       return text.replaceAll('"', '').split('\n').first.trim();
     } catch (e) {
-      debugPrint('Cohere reflect error: $e');
+      // debugPrint('Cohere reflect error: $e');
       return _fallbackReflection(agentName);
     }
   }
@@ -342,7 +342,7 @@ Respond ONLY with a single JSON object matching this schema. No prose, no code f
       if (list.isEmpty) return _fallbackPlan();
       return list;
     } catch (e) {
-      debugPrint('Cohere dailyPlan error: $e');
+      // debugPrint('Cohere dailyPlan error: $e');
       return _fallbackPlan();
     }
   }
