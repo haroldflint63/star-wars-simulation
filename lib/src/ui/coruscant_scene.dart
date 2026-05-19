@@ -2535,26 +2535,139 @@ class _BoganoPainter extends CustomPainter {
 
   void _drawSky(Canvas canvas, Size s) {
     final rect = Offset.zero & s;
+    // Multi-stop atmospheric gradient — deep space top → magenta/violet
+    // upper atmosphere → amber horizon haze → city-glow base.
     _p
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          Color(0xFF0A1218),
-          Color(0xFF14232C),
-          Color(0xFF3A3220),
-          Color(0xFF1E1A14),
+          Color(0xFF03060E), // outer space
+          Color(0xFF0A1530), // upper sky
+          Color(0xFF2A1A48), // violet band
+          Color(0xFF7B3A2E), // dusk amber
+          Color(0xFFE2A45A), // horizon glow
+          Color(0xFF1A1108), // smog floor
         ],
-        stops: [0.0, 0.45, 0.70, 1.0],
+        stops: [0.0, 0.22, 0.42, 0.58, 0.72, 1.0],
       ).createShader(rect)
       ..style = PaintingStyle.fill;
     canvas.drawRect(rect, _p);
     _p.shader = null;
 
+    // Soft purple nebula clouds in upper sky
+    for (var i = 0; i < 4; i++) {
+      final cx = (i * 211 + 80) % s.width.toInt() * 1.0;
+      final cy = s.height * (0.08 + (i % 2) * 0.07);
+      final rad = 220.0 + (i * 47) % 90;
+      _glow
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0xFFB259FF).withValues(alpha: 0.12),
+            const Color(0xFF3A1A6B).withValues(alpha: 0.06),
+            Colors.transparent,
+          ],
+          stops: const [0.0, 0.5, 1.0],
+        ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: rad))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(cx, cy), rad, _glow);
+    }
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+
+    // Distant planet — large ringed gas giant top-left
+    final planetC = Offset(s.width * 0.18, s.height * 0.16);
+    const planetR = 46.0;
+    // halo
+    _glow
+      ..shader = RadialGradient(
+        colors: [
+          const Color(0xFFFFCDA0).withValues(alpha: 0.35),
+          Colors.transparent,
+        ],
+      ).createShader(Rect.fromCircle(center: planetC, radius: planetR * 1.9))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(planetC, planetR * 1.9, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+    // body
+    _p
+      ..shader = RadialGradient(
+        center: const Alignment(-0.4, -0.4),
+        colors: const [
+          Color(0xFFFFE5BC),
+          Color(0xFFD89762),
+          Color(0xFF6B3F22),
+        ],
+        stops: const [0.0, 0.6, 1.0],
+      ).createShader(Rect.fromCircle(center: planetC, radius: planetR))
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(planetC, planetR, _p);
+    _p.shader = null;
+    // bands
+    _p
+      ..color = const Color(0xFF8A5530).withValues(alpha: 0.35)
+      ..style = PaintingStyle.fill;
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: planetC, radius: planetR)));
+    for (var i = -3; i <= 3; i++) {
+      canvas.drawRect(
+        Rect.fromLTWH(planetC.dx - planetR, planetC.dy + i * 10.0, planetR * 2, 3.5),
+        _p,
+      );
+    }
+    canvas.restore();
+    // ring
+    _p
+      ..color = const Color(0xFFEFC79B).withValues(alpha: 0.55)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+    canvas.drawOval(
+      Rect.fromCenter(center: planetC, width: planetR * 3.2, height: planetR * 0.7),
+      _p,
+    );
+    _p
+      ..color = const Color(0xFF8A5530).withValues(alpha: 0.35)
+      ..strokeWidth = 4.0;
+    canvas.drawOval(
+      Rect.fromCenter(center: planetC, width: planetR * 3.6, height: planetR * 0.9),
+      _p,
+    );
+    _p.style = PaintingStyle.fill;
+
+    // Small moon
+    final moonC = Offset(s.width * 0.32, s.height * 0.10);
+    _glow
+      ..shader = RadialGradient(colors: [
+        Colors.white.withValues(alpha: 0.5),
+        Colors.transparent,
+      ]).createShader(Rect.fromCircle(center: moonC, radius: 24))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(moonC, 24, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver..color = const Color(0xFFE8E2D6);
+    canvas.drawCircle(moonC, 8, _glow);
+
+    // Stars — twinkle + size variation
     for (final st in world.stars) {
-      final a = (sin(st.twinkle) * 0.35 + 0.55).clamp(0.0, 1.0);
-      _p.color = const Color(0xFFCDE7FF).withValues(alpha: a * 0.35);
-      canvas.drawCircle(Offset(st.x, st.y * 0.55), st.r * 0.9, _p);
+      final a = (sin(st.twinkle) * 0.4 + 0.6).clamp(0.0, 1.0);
+      _p.color = const Color(0xFFE8F1FF).withValues(alpha: a * 0.7);
+      canvas.drawCircle(Offset(st.x, st.y * 0.55), st.r * 1.1, _p);
+      // Cross-flare on brighter stars
+      if (st.r > 1.2) {
+        _p
+          ..color = const Color(0xFFCDE7FF).withValues(alpha: a * 0.4)
+          ..strokeWidth = 0.6
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(
+          Offset(st.x - 3, st.y * 0.55),
+          Offset(st.x + 3, st.y * 0.55),
+          _p,
+        );
+        canvas.drawLine(
+          Offset(st.x, st.y * 0.55 - 3),
+          Offset(st.x, st.y * 0.55 + 3),
+          _p,
+        );
+        _p.style = PaintingStyle.fill;
+      }
     }
   }
 
@@ -2665,63 +2778,155 @@ class _BoganoPainter extends CustomPainter {
 
     final dark = Color.lerp(_stoneDark, Colors.black, 1.0 - depth)!;
     final mid = Color.lerp(_stoneMid, _stoneDark, 1.0 - depth)!;
+    final light = Color.lerp(_stoneLight, _stoneMid, 1.0 - depth)!;
+
+    // Stepped silhouette — narrow setbacks at intervals like a Coruscant
+    // arcology tower instead of a featureless slab.
+    final rng = Random(b.windowSeed);
+    final segments = 2 + rng.nextInt(3); // 2..4 setbacks
+    var segTop = top;
+    var segX = b.x;
+    var segW = b.width;
+    final segs = <Rect>[];
+    for (var i = 0; i < segments; i++) {
+      final segH = (b.height - (segTop - top)) * (i == segments - 1 ? 1.0 : (0.35 + rng.nextDouble() * 0.25));
+      final r = Rect.fromLTWH(segX, segTop, segW, segH);
+      segs.add(r);
+      // Inset for next segment
+      final inset = 4 + rng.nextDouble() * (segW * 0.18);
+      segX += inset / 2;
+      segW -= inset;
+      segTop += segH;
+      if (segW < 8) break;
+    }
+
+    // Body fill (deep) with vertical gradient
     _p
       ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
         colors: [mid, dark],
       ).createShader(rect)
       ..style = PaintingStyle.fill;
-    canvas.drawRect(rect, _p);
+    for (final r in segs) {
+      canvas.drawRect(r, _p);
+    }
+    _p.shader = null;
 
-    _p
-      ..shader = null
-      ..color = _stoneLight.withValues(alpha: 0.35 * depth)
-      ..style = PaintingStyle.fill;
-    final bands = (b.height / 45).floor().clamp(2, 7);
-    for (var i = 1; i <= bands; i++) {
-      final y = top + (b.height * i / (bands + 1));
-      canvas.drawRect(Rect.fromLTWH(b.x + 2, y, b.width - 4, 2.5), _p);
+    // Edge highlights (sun-side rim warm, shadow-side cool)
+    _p.color = _rimOrange.withValues(alpha: 0.55 * depth);
+    for (final r in segs) {
+      canvas.drawRect(Rect.fromLTWH(r.left, r.top, 1.6, r.height), _p);
+    }
+    _p.color = _sabreBlue.withValues(alpha: 0.22 * depth);
+    for (final r in segs) {
+      canvas.drawRect(Rect.fromLTWH(r.right - 1.6, r.top, 1.6, r.height), _p);
     }
 
-    _p.color = const Color(0xFF0B0F13).withValues(alpha: 0.6 * depth);
-    canvas.drawRect(Rect.fromLTWH(cx - 2, top + 8, 4, b.height - 16), _p);
+    // Window grid — rows of lit cells. Some on, some off.
+    final winCols = ((b.width - 6) / 5).floor().clamp(2, 8);
+    final colW = (b.width - 6) / winCols;
+    final winRng = Random(b.windowSeed * 17 + 3);
+    for (final r in segs) {
+      final winRows = (r.height / 7).floor().clamp(2, 30);
+      for (var row = 0; row < winRows; row++) {
+        for (var col = 0; col < winCols; col++) {
+          final wx = r.left + 3 + col * colW;
+          final wy = r.top + 4 + row * 7;
+          final on = winRng.nextDouble();
+          if (on < 0.55) {
+            // unlit — dim recess
+            _p.color = const Color(0xFF050709).withValues(alpha: 0.6 * depth);
+            canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.4), _p);
+          } else {
+            // lit — warm or cyan
+            final warm = on > 0.78;
+            final c = warm ? const Color(0xFFFFC56A) : const Color(0xFF7FD3FF);
+            _p.color = c.withValues(alpha: (0.55 + (on - 0.55) * 0.9) * depth);
+            canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.4), _p);
+            // soft bloom on the brightest windows
+            if (on > 0.86 && depth > 0.6) {
+              _glow
+                ..shader = RadialGradient(colors: [
+                  c.withValues(alpha: 0.5 * depth),
+                  c.withValues(alpha: 0.0),
+                ]).createShader(Rect.fromCircle(
+                  center: Offset(wx + colW / 2, wy + 1.7),
+                  radius: 7,
+                ))
+                ..blendMode = BlendMode.plus;
+              canvas.drawCircle(Offset(wx + colW / 2, wy + 1.7), 7, _glow);
+              _glow..shader = null..blendMode = BlendMode.srcOver;
+            }
+          }
+        }
+      }
+    }
 
+    // Mechanical seam down the middle of base segment
+    _p.color = const Color(0xFF0B0F13).withValues(alpha: 0.5 * depth);
+    canvas.drawRect(Rect.fromLTWH(cx - 0.8, top + 8, 1.6, b.height - 16), _p);
+
+    // Crown / roof structure variations
     final capH = 10 + (b.roofKind * 4).toDouble();
-    _p.color = mid;
-    final cap = Path()
-      ..moveTo(b.x - 4, top)
-      ..lineTo(b.x + b.width + 4, top)
-      ..lineTo(b.x + b.width, top - capH)
-      ..lineTo(b.x, top - capH)
-      ..close();
-    canvas.drawPath(cap, _p);
+    final topRect = segs.last;
+    _p.color = light.withValues(alpha: 0.9);
+    switch (b.roofKind % 4) {
+      case 0:
+        // Trapezoidal cap
+        final cap = Path()
+          ..moveTo(topRect.left - 4, topRect.top)
+          ..lineTo(topRect.right + 4, topRect.top)
+          ..lineTo(topRect.right, topRect.top - capH)
+          ..lineTo(topRect.left, topRect.top - capH)
+          ..close();
+        canvas.drawPath(cap, _p);
+        break;
+      case 1:
+        // Twin antenna spires
+        canvas.drawRect(
+          Rect.fromLTWH(topRect.left - 2, topRect.top - 4, topRect.width + 4, 4),
+          _p,
+        );
+        _p.color = const Color(0xFF2A2A2E);
+        canvas.drawRect(Rect.fromLTWH(topRect.left + topRect.width * 0.25 - 0.8, topRect.top - capH * 2, 1.6, capH * 2), _p);
+        canvas.drawRect(Rect.fromLTWH(topRect.left + topRect.width * 0.75 - 0.8, topRect.top - capH * 1.4, 1.6, capH * 1.4), _p);
+        // red aircraft warning lights
+        _p.color = const Color(0xFFFF3148).withValues(alpha: 0.6 + 0.4 * sin(world.t * 3 + b.windowSeed));
+        canvas.drawCircle(Offset(topRect.left + topRect.width * 0.25, topRect.top - capH * 2), 1.2, _p);
+        canvas.drawCircle(Offset(topRect.left + topRect.width * 0.75, topRect.top - capH * 1.4), 1.2, _p);
+        break;
+      case 2:
+        // Domed observation deck
+        canvas.drawArc(
+          Rect.fromLTWH(topRect.left, topRect.top - capH, topRect.width, capH * 2),
+          pi, pi, false, _p,
+        );
+        _p.color = const Color(0xFF7FD3FF).withValues(alpha: 0.7 * depth);
+        canvas.drawArc(
+          Rect.fromLTWH(topRect.left + 2, topRect.top - capH + 1, topRect.width - 4, (capH - 1) * 2),
+          pi + 0.4, pi - 0.8, false, _p,
+        );
+        break;
+      case 3:
+        // Stepped pyramid cap
+        canvas.drawRect(Rect.fromLTWH(topRect.left + 2, topRect.top - capH * 0.5, topRect.width - 4, capH * 0.5), _p);
+        canvas.drawRect(Rect.fromLTWH(topRect.left + topRect.width * 0.3, topRect.top - capH, topRect.width * 0.4, capH * 0.5), _p);
+        _p.color = const Color(0xFFFF3148).withValues(alpha: 0.7 + 0.3 * sin(world.t * 2));
+        canvas.drawCircle(Offset(cx, topRect.top - capH - 1), 1.1, _p);
+        break;
+    }
 
-    _p.color = _rimOrange.withValues(alpha: 0.55 * depth);
-    canvas.drawRect(Rect.fromLTWH(b.x, top, 1.6, b.height), _p);
-
-    _p.color = _sabreBlue.withValues(alpha: 0.20 * depth);
-    canvas.drawRect(Rect.fromLTWH(b.x + b.width - 1.6, top, 1.6, b.height), _p);
-
-    final rng = Random(b.windowSeed);
-    final crystals = 1 + rng.nextInt(3);
-    for (var i = 0; i < crystals; i++) {
-      final ox = b.x + 8 + rng.nextDouble() * (b.width - 16);
-      final oy = top + 20 + rng.nextDouble() * (b.height - 40);
+    // Soft halo at building base (city ambient bloom)
+    if (depth > 0.55) {
       _glow
-        ..shader = RadialGradient(
-          colors: [
-            _sabreBlue.withValues(alpha: 0.9 * depth),
-            _sabreBlue.withValues(alpha: 0.0),
-          ],
-        ).createShader(Rect.fromCircle(center: Offset(ox, oy), radius: 14))
+        ..shader = RadialGradient(colors: [
+          const Color(0xFFFFC56A).withValues(alpha: 0.18 * depth),
+          Colors.transparent,
+        ]).createShader(Rect.fromCircle(center: Offset(cx, b.baseY), radius: b.width * 1.2))
         ..blendMode = BlendMode.plus;
-      canvas.drawCircle(Offset(ox, oy), 14, _glow);
-      _glow
-        ..shader = null
-        ..blendMode = BlendMode.srcOver
-        ..color = const Color(0xFFB6E6FF);
-      canvas.drawCircle(Offset(ox, oy), 1.6 * depth, _glow);
+      canvas.drawCircle(Offset(cx, b.baseY), b.width * 1.2, _glow);
+      _glow..shader = null..blendMode = BlendMode.srcOver;
     }
   }
 
@@ -2784,31 +2989,117 @@ class _BoganoPainter extends CustomPainter {
   void _drawGround(Canvas canvas, Size s) {
     final groundY = s.height * 0.78;
     final rect = Rect.fromLTWH(0, groundY, s.width, s.height - groundY);
+
+    // Wet reflective duracrete plaza — dark teal -> near-black,
+    // with subtle horizontal scanline reflection of horizon glow.
     _p
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          Color(0xFF1A1410),
-          Color(0xFF080606),
+          Color(0xFF2A1A10), // wet horizon reflection (matches dusk amber)
+          Color(0xFF14181C),
+          Color(0xFF07090C),
+          Color(0xFF020304),
         ],
+        stops: [0.0, 0.18, 0.55, 1.0],
       ).createShader(rect)
       ..style = PaintingStyle.fill;
     canvas.drawRect(rect, _p);
     _p.shader = null;
 
+    // Perspective grid — vanishing toward center horizon.
+    final vp = Offset(s.width * 0.5, groundY - 4);
+    _p
+      ..color = _sabreBlue.withValues(alpha: 0.18)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    // Radial lines (perspective)
+    for (var i = -8; i <= 8; i++) {
+      final endX = s.width * 0.5 + i * (s.width * 0.16);
+      canvas.drawLine(vp, Offset(endX, s.height + 4), _p);
+    }
+    // Horizontal scanlines spaced by perspective (denser near horizon)
+    for (var i = 1; i <= 14; i++) {
+      final t = i / 14.0;
+      final y = groundY + pow(t, 2.2).toDouble() * (s.height - groundY) * 1.05;
+      if (y > s.height) break;
+      final alpha = (0.22 * (1 - t * 0.6)).clamp(0.0, 0.22);
+      _p.color = _sabreBlue.withValues(alpha: alpha);
+      canvas.drawLine(Offset(0, y), Offset(s.width, y), _p);
+    }
+    _p.style = PaintingStyle.fill;
+
+    // Wet puddles — orange/blue light reflections smeared along ground.
+    final puddleRng = Random(7);
+    for (var i = 0; i < 8; i++) {
+      final px = puddleRng.nextDouble() * s.width;
+      final py = groundY + 8 + puddleRng.nextDouble() * (s.height - groundY - 12);
+      final pw = 40 + puddleRng.nextDouble() * 110;
+      final ph = 4 + puddleRng.nextDouble() * 6;
+      final warm = puddleRng.nextBool();
+      final col = warm ? const Color(0xFFFF9A4A) : const Color(0xFF7FD3FF);
+      _glow
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            col.withValues(alpha: 0.22),
+            col.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromLTWH(px, py, pw, ph * 4))
+        ..blendMode = BlendMode.plus;
+      canvas.drawOval(Rect.fromLTWH(px, py, pw, ph), _glow);
+      _glow..shader = null..blendMode = BlendMode.srcOver;
+    }
+
+    // Landing pad — concentric rings + hazard chevrons at center plaza.
     final c = Offset(s.width * 0.5, s.height * 0.86);
     for (var i = 0; i < 3; i++) {
       _p
-        ..color = _sabreBlue.withValues(alpha: 0.10 - i * 0.025)
-        ..strokeWidth = 1.0
+        ..color = _rimOrange.withValues(alpha: 0.18 - i * 0.045)
+        ..strokeWidth = 1.2
         ..style = PaintingStyle.stroke;
       canvas.drawOval(
-        Rect.fromCenter(center: c, width: 220 + i * 80.0, height: 36 + i * 14.0),
+        Rect.fromCenter(center: c, width: 220 + i * 90.0, height: 38 + i * 16.0),
         _p,
       );
     }
+    // Inner pad cross
+    _p
+      ..color = _rimOrange.withValues(alpha: 0.35)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(Offset(c.dx - 60, c.dy), Offset(c.dx + 60, c.dy), _p);
+    canvas.drawLine(Offset(c.dx, c.dy - 12), Offset(c.dx, c.dy + 12), _p);
+    // Hazard stripes near edge
     _p.style = PaintingStyle.fill;
+    _p.color = const Color(0xFFFFC56A).withValues(alpha: 0.35);
+    for (var i = 0; i < 10; i++) {
+      final ang = (i / 10) * pi * 2;
+      final r1 = 95.0;
+      final r2 = 102.0;
+      canvas.drawLine(
+        Offset(c.dx + cos(ang) * r1, c.dy + sin(ang) * r1 * 0.32),
+        Offset(c.dx + cos(ang) * r2, c.dy + sin(ang) * r2 * 0.32),
+        Paint()
+          ..color = const Color(0xFFFFC56A).withValues(alpha: 0.55)
+          ..strokeWidth = 2.0,
+      );
+    }
+
+    // Subtle ground bloom from horizon
+    _glow
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          const Color(0xFFFF8B3D).withValues(alpha: 0.15),
+          Colors.transparent,
+        ],
+      ).createShader(Rect.fromLTWH(0, groundY, s.width, 28))
+      ..blendMode = BlendMode.plus;
+    canvas.drawRect(Rect.fromLTWH(0, groundY, s.width, 28), _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
   }
 
   void _drawVignette(Canvas canvas, Size s) {

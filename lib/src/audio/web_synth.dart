@@ -165,13 +165,13 @@ class WebSynth {
     // Notes (Hz) for the famous theme (G minor):
     // G3=196, Eb3=155.56, Bb3=233.08, D4=293.66, F#4=370, F4=349.23, Eb4=311.13
     const beat = 0.40; // seconds per beat
-    final phrase = <List<num>>[
+    final phrase = <List<double>>[
       // pitch, beats
       [196, 1], [196, 1], [196, 1],          // G G G
       [155.56, 0.75], [233.08, 0.25], [196, 1],
       [155.56, 0.75], [233.08, 0.25], [196, 2],
       [293.66, 1], [293.66, 1], [293.66, 1],
-      [311.13, 0.75], [233.08, 0.      [85, 1],   // F#? ap    
+      [311.13, 0.75], [233.08, 0.25], [196, 1],
       [155.56, 0.75], [233.08, 0.25], [196, 2],
     ];
 
@@ -193,8 +193,8 @@ class WebSynth {
         final g = ctx.createGain();
         g.gain.setValueAtTime(0.001, t);
         g.gain.exponentialRampToValueAtTime(0.18, t + 0.03);
-                                            - 0.05);
-                                       Time(0.001, t + dur);
+        g.gain.exponentialRampToValueAtTime(0.12, t + dur - 0.05);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
         // Lowpass for that brassy tone
         final lp = ctx.createBiquadFilter();
         lp.type = 'lowpass';
@@ -225,14 +225,14 @@ class WebSynth {
         (() {
           tick();
         }).toJS,
-        (loopLen * 1000).toInt(),
+        (loopLen * 1000).toInt().toJS,
       );
     }
     _marchTimer = web.window.setTimeout(
       (() {
         tick();
       }).toJS,
-      (loopLen * 1000).toInt(),
+      (loopLen * 1000).toInt().toJS,
     );
   }
 
