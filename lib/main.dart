@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'src/ui/aaa_simulation_view.dart';
+import 'src/ui/coruscant_scene.dart';
 import 'src/audio/star_wars_sounds.dart';
 
 void main() async {
@@ -163,7 +164,15 @@ class _SplashWrapperState extends State<_SplashWrapper>
 
     return FadeTransition(
       opacity: _fadeAnimation,
-      child: const AAASimulationView(),
+      child: const CoruscantScene(),
     );
   }
+}
+
+// Keep prior screen available for navigation if needed.
+// ignore: unused_element
+class _LegacyHome extends StatelessWidget {
+  const _LegacyHome();
+  @override
+  Widget build(BuildContext context) => const AAASimulationView();
 }
