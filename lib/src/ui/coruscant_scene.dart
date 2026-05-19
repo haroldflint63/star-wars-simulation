@@ -3082,44 +3082,172 @@ class _BoganoPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTWH(r.right - 1.6, r.top, 1.6, r.height), _p);
     }
 
-    // Window grid — rows of lit cells. Some on, some off.
+    // Window grid — animated lit cells with deterministic per-window
+    // phase. Some windows have tiny silhouettes of moving characters.
     final winCols = ((b.width - 6) / 5).floor().clamp(2, 8);
     final colW = (b.width - 6) / winCols;
-    final winRng = Random(b.windowSeed * 17 + 3);
-    for (final r in segs) {
+    final t = world.t;
+    for (var segIdx = 0; segIdx < segs.length; segIdx++) {
+      final r = segs[segIdx];
       final winRows = (r.height / 7).floor().clamp(2, 30);
       for (var row = 0; row < winRows; row++) {
         for (var col = 0; col < winCols; col++) {
           final wx = r.left + 3 + col * colW;
           final wy = r.top + 4 + row * 7;
-          final on = winRng.nextDouble();
-          if (on < 0.55) {
-            // unlit — dim recess
-            _p.color = const Color(0xFF050709).withValues(alpha: 0.6 * depth);
-            canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.4), _p);
-          } else {
-            // lit — warm or cyan
-            final warm = on > 0.78;
-            final c = warm ? const Color(0xFFFFC56A) : const Color(0xFF7FD3FF);
-            _p.color = c.withValues(alpha: (0.55 + (on - 0.55) * 0.9) * depth);
-            canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.4), _p);
-            // soft bloom on the brightest windows
-            if (on > 0.86 && depth > 0.6) {
-              _glow
-                ..shader = RadialGradient(colors: [
-                  c.withValues(alpha: 0.5 * depth),
-                  c.withValues(alpha: 0.0),
-                ]).createShader(Rect.fromCircle(
-                  center: Offset(wx + colW / 2, wy + 1.7),
-                  radius: 7,
-                ))
-                ..blendMode = BlendMode.plus;
-              canvas.drawCircle(Offset(wx + colW / 2, wy + 1.7), 7, _glow);
-              _glow..shader = null..blendMode = BlendMode.srcOver;
-            }
+          // Stable per-window pseudo-random using building seed + cell
+          final h = ((b.windowSeed * 73856093) ^
+                  (segIdx * 19349663) ^
+                  (row * 83492791) ^
+                  (col * 2654435761))
+              .toUnsigned(32);
+          final base = (h & 0xFF) / 255.0;
+          final isLit = base > 0.42; // ~58% of windows are lit
+          if (!isLit) {
+            // unlit — dim recess with subtle inner shadow
+            _p.color = const Color(0xFF050709).withValues(alpha: 0.7 * depth);
+            canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.6), _p);
+            continue;
+          }
+
+          // Flicker phase keyed to hash so each window animates independently
+          final phase = (h >> 8 & 0xFF) / 255.0 * pi * 2;
+          final flickRate = 0.6 + ((h >> 16) & 0x07) * 0.4;
+          final flick = 0.75 + 0.25 * sin(t * flickRate + phase);
+
+          // Occasional "shutter" — window briefly goes dark
+          final shutter = ((sin(t * 0.27 + phase * 3) + 1) * 0.5);
+          if (shutter < 0.07) {
+            _p.color = const Color(0xFF0A0E12).withValues(alpha: 0.85 * depth);
+            canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.6), _p);
+            continue;
+          }
+
+          // Color: warm interior most common, cool cyan for med-bays/holo
+          final warm = ((h >> 24) & 0xFF) < 195;
+          final col0 = warm ? const Color(0xFFFFC56A) : const Color(0xFF7FD3FF);
+
+          // Window pane
+          _p.color = col0.withValues(alpha: (0.55 + 0.45 * flick) * depth);
+          canvas.drawRect(Rect.fromLTWH(wx, wy, colW - 2, 3.6), _p);
+
+          // Tiny moving silhouette in ~1 of 8 lit windows.
+          // Two pixels wide, walks across the window over a few seconds.
+          if (((h >> 20) & 0x07) == 0 && colW > 4.5) {
+            final walkSpeed = 0.6 + ((h >> 12) & 0x03) * 0.3;
+            final phase2 = (h >> 4 & 0xFF) / 255.0;
+            final cycle = ((t * walkSpeed + phase2) % 1.0);
+            final px = wx + 1 + cycle * (colW - 4);
+            _p.color = Colors.black.withValues(alpha: 0.85);
+            // Head
+            canvas.drawRect(Rect.fromLTWH(px, wy + 0.4, 1.0, 1.0), _p);
+            // Body — slight bob
+            final bob = (sin(t * 8 + phase * 2) * 0.4).abs();
+            canvas.drawRect(Rect.fromLTWH(px, wy + 1.4 - bob * 0.2, 1.0, 2.0 - bob * 0.2), _p);
+          }
+
+          // Bloom on the brightest windows (foreground only)
+          if (flick > 0.92 && depth > 0.7) {
+            _glow
+              ..shader = RadialGradient(colors: [
+                col0.withValues(alpha: 0.5 * depth),
+                col0.withValues(alpha: 0.0),
+              ]).createShader(Rect.fromCircle(
+                center: Offset(wx + colW / 2, wy + 1.8),
+                radius: 8,
+              ))
+              ..blendMode = BlendMode.plus;
+            canvas.drawCircle(Offset(wx + colW / 2, wy + 1.8), 8, _glow);
+            _glow..shader = null..blendMode = BlendMode.srcOver;
           }
         }
       }
+    }
+
+    // Horizontal skylane — bright speeders zipping past the building face
+    // at random Y heights. Only visible on mid/fg buildings.
+    if (depth > 0.5 && b.width > 28) {
+      final laneSeed = b.windowSeed;
+      final lanes = 1 + (laneSeed & 0x01); // 1 or 2 lanes per building
+      for (var li = 0; li < lanes; li++) {
+        final laneY = top + 24 + ((laneSeed >> (li * 3)) & 0x0F) * (b.height / 18);
+        // Two speeders per lane, separated, looping
+        for (var si = 0; si < 2; si++) {
+          final spd = 70 + ((laneSeed >> (li * 5 + si * 2)) & 0x07) * 12.0;
+          final phase = (((laneSeed >> (li * 7 + si * 3)) & 0xFF) / 255.0);
+          final cycle = ((world.t * spd / (b.width + 60)) + phase + si * 0.5) % 1.0;
+          final dir = (laneSeed >> (li + 1)) & 1 == 0 ? 1 : -1;
+          final sx = dir > 0
+              ? b.x - 20 + cycle * (b.width + 40)
+              : b.x + b.width + 20 - cycle * (b.width + 40);
+          // Body
+          _p.color = const Color(0xFFE8E2D6).withValues(alpha: 0.85 * depth);
+          canvas.drawRect(Rect.fromLTWH(sx - 1.6, laneY, 3.2, 1.2), _p);
+          // Forward headlight
+          final headC = dir > 0
+              ? const Color(0xFFFFC56A)
+              : const Color(0xFFFF3148);
+          _glow
+            ..shader = RadialGradient(colors: [
+              headC.withValues(alpha: 0.95 * depth),
+              headC.withValues(alpha: 0.0),
+            ]).createShader(Rect.fromCircle(
+              center: Offset(sx + dir * 2.0, laneY + 0.6),
+              radius: 4,
+            ))
+            ..blendMode = BlendMode.plus;
+          canvas.drawCircle(Offset(sx + dir * 2.0, laneY + 0.6), 4, _glow);
+          _glow..shader = null..blendMode = BlendMode.srcOver;
+          // Engine trail
+          _p.color = const Color(0xFF7FD3FF).withValues(alpha: 0.45 * depth);
+          canvas.drawRect(
+            Rect.fromLTWH(sx - dir * 4, laneY + 0.4, 4.0, 0.5),
+            _p,
+          );
+        }
+      }
+    }
+
+    // Holographic billboard — vertical strip of glowing aurebesh-style
+    // glyphs scrolling upward. Only on a subset of mid/fg buildings.
+    if (depth > 0.6 && (b.windowSeed & 0x03) == 0 && b.width > 22) {
+      final bbx = b.x + b.width * 0.5 - 6;
+      final bbTop = top + b.height * 0.18;
+      final bbH = b.height * 0.5;
+      // Backing panel — dark slab with neon edge
+      _p.color = const Color(0xFF0A0E14).withValues(alpha: 0.85);
+      canvas.drawRect(Rect.fromLTWH(bbx - 1, bbTop, 14, bbH), _p);
+      _p.color = const Color(0xFFFF3148).withValues(alpha: 0.7 + 0.3 * sin(world.t * 3));
+      canvas.drawRect(Rect.fromLTWH(bbx - 1, bbTop, 14, 1.2), _p);
+      canvas.drawRect(Rect.fromLTWH(bbx - 1, bbTop + bbH - 1.2, 14, 1.2), _p);
+      // Scrolling glyphs (rendered as randomized stacked rectangles
+      // representing aurebesh letters) — they slide upward.
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(bbx - 1, bbTop, 14, bbH));
+      const lineH = 6.0;
+      final glyphCount = (bbH / lineH).ceil() + 2;
+      final scroll = (world.t * 14) % lineH;
+      for (var gi = 0; gi < glyphCount; gi++) {
+        final gy = bbTop + bbH - gi * lineH - 1 + scroll;
+        final g = (b.windowSeed + gi * 271) & 0x0F;
+        // Build a fake 3-segment glyph
+        _p.color = const Color(0xFFFFD46B).withValues(alpha: 0.95);
+        canvas.drawRect(Rect.fromLTWH(bbx, gy, 4 + (g & 0x03), 1.2), _p);
+        canvas.drawRect(Rect.fromLTWH(bbx + 5, gy + 1.6, 4 + ((g >> 2) & 0x03), 1.2), _p);
+        canvas.drawRect(Rect.fromLTWH(bbx + 2, gy + 3.2, 3 + ((g >> 1) & 0x03), 1.2), _p);
+      }
+      canvas.restore();
+      // Soft red bloom around billboard
+      _glow
+        ..shader = RadialGradient(colors: [
+          const Color(0xFFFF3148).withValues(alpha: 0.25),
+          Colors.transparent,
+        ]).createShader(Rect.fromCircle(
+          center: Offset(bbx + 6, bbTop + bbH * 0.5),
+          radius: 18,
+        ))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(bbx + 6, bbTop + bbH * 0.5), 18, _glow);
+      _glow..shader = null..blendMode = BlendMode.srcOver;
     }
 
     // Mechanical seam down the middle of base segment
