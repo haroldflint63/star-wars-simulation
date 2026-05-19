@@ -394,6 +394,14 @@ class _World {
   double t = 0;
   double sunPhase = 0; // 0..1 across the sky
 
+  // Millennium Falcon flyby — cycles across the screen, then waits.
+  double falconX = -200;
+  double falconY = 0;
+  double falconCooldown = 6; // seconds until next flyby
+
+  // Star Destroyer slow drift (parallax background)
+  double destroyerX = 0;
+
   void ensureSized(double width, double height) {
     if (width <= 0 || height <= 0) return;
     if (!_seeded || (width - w).abs() > 1 || (height - h).abs() > 1) {
@@ -579,6 +587,23 @@ class _World {
   void tick(double dt) {
     t += dt;
     sunPhase = (sunPhase + dt * 0.012) % 1.0;
+
+    // Millennium Falcon flyby
+    if (falconX > w + 220) {
+      falconCooldown -= dt;
+      if (falconCooldown <= 0) {
+        falconX = -200;
+        falconY = h * (0.12 + _combatRand.nextDouble() * 0.10);
+        falconCooldown = 9 + _combatRand.nextDouble() * 8;
+      }
+    } else {
+      falconX += 220 * dt;
+    }
+
+    // Star Destroyer slow drift
+    destroyerX += dt * 4;
+    if (destroyerX > w + 400) destroyerX = -500;
+
     for (final s in ships) {
       s.x += s.speed * s.dir * dt;
       if (s.dir > 0 && s.x > w + 80) s.x = -80;
@@ -2356,6 +2381,8 @@ class _BoganoPainter extends CustomPainter {
       canvas.translate(world.shakeX, world.shakeY);
     }
     _drawSky(canvas, size);
+    _drawDeathStar(canvas, size);
+    _drawStarDestroyer(canvas, size);
     _drawDistantPeaks(canvas, size);
     _drawGodRays(canvas, size);
     _drawFogBand(canvas, size, 0.45, 0.04);
@@ -2366,6 +2393,7 @@ class _BoganoPainter extends CustomPainter {
     _drawRuins(canvas, world.fgBuildings, 1.0);
     _drawFireflies(canvas);
     _drawFighters(canvas);
+    _drawFalcon(canvas, size);
     _drawGround(canvas, size);
     _drawWalkers(canvas);
     _drawBolts(canvas);
@@ -2669,6 +2697,237 @@ class _BoganoPainter extends CustomPainter {
         _p.style = PaintingStyle.fill;
       }
     }
+  }
+
+  // ====================================================================
+  // ICONIC STAR WARS SET-PIECES — Death Star, Star Destroyer, Falcon
+  // ====================================================================
+
+  void _drawDeathStar(Canvas canvas, Size s) {
+    // Top-right of the sky, fairly large but desaturated/distant.
+    final c = Offset(s.width * 0.82, s.height * 0.16);
+    const r = 56.0;
+
+    // Outer halo
+    _glow
+      ..shader = RadialGradient(colors: [
+        const Color(0xFFB8C2CC).withValues(alpha: 0.35),
+        Colors.transparent,
+      ]).createShader(Rect.fromCircle(center: c, radius: r * 2.0))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(c, r * 2.0, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+
+    // Body — radial light from upper-left, dark on the bottom-right.
+    _p
+      ..shader = RadialGradient(
+        center: const Alignment(-0.35, -0.35),
+        colors: const [
+          Color(0xFFCED4DA),
+          Color(0xFF6B7480),
+          Color(0xFF1E2228),
+        ],
+        stops: const [0.0, 0.6, 1.0],
+      ).createShader(Rect.fromCircle(center: c, radius: r))
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(c, r, _p);
+    _p.shader = null;
+
+    // Equatorial trench
+    _p
+      ..color = const Color(0xFF1A1D22)
+      ..strokeWidth = 2.4
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(Offset(c.dx - r + 4, c.dy + 2), Offset(c.dx + r - 4, c.dy + 2), _p);
+
+    // Surface lat lines
+    _p
+      ..color = const Color(0xFF2A3038).withValues(alpha: 0.45)
+      ..strokeWidth = 0.6;
+    for (var i = -3; i <= 3; i++) {
+      if (i == 0) continue;
+      final y = c.dy + i * 11.0;
+      final dx = sqrt((r * r - (i * 11.0).abs() * (i * 11.0).abs()).clamp(0.0, r * r));
+      canvas.drawLine(Offset(c.dx - dx, y), Offset(c.dx + dx, y), _p);
+    }
+    _p.style = PaintingStyle.fill;
+
+    // Superlaser dish — upper-left concave circle
+    final dishC = Offset(c.dx - r * 0.42, c.dy - r * 0.42);
+    const dishR = 13.0;
+    _p
+      ..shader = RadialGradient(colors: const [
+        Color(0xFF8E96A0),
+        Color(0xFF2C3138),
+      ]).createShader(Rect.fromCircle(center: dishC, radius: dishR))
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(dishC, dishR, _p);
+    _p.shader = null;
+    _p
+      ..color = const Color(0xFF12161B)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    canvas.drawCircle(dishC, dishR, _p);
+    _p.style = PaintingStyle.fill;
+    // Dish inner crosshair
+    _p
+      ..color = const Color(0xFF12161B)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(Offset(dishC.dx - dishR, dishC.dy), Offset(dishC.dx + dishR, dishC.dy), _p);
+    canvas.drawLine(Offset(dishC.dx, dishC.dy - dishR), Offset(dishC.dx, dishC.dy + dishR), _p);
+    _p.style = PaintingStyle.fill;
+
+    // Outline
+    _p
+      ..color = const Color(0xFF12161B)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke;
+    canvas.drawCircle(c, r, _p);
+    _p.style = PaintingStyle.fill;
+  }
+
+  void _drawStarDestroyer(Canvas canvas, Size s) {
+    // Massive triangular wedge slowly drifting in the mid-sky band.
+    final x = world.destroyerX;
+    final y = s.height * 0.30;
+    final len = 280.0;
+    final wid = 70.0;
+
+    // Distant atmospheric haze
+    _glow
+      ..shader = RadialGradient(colors: [
+        const Color(0xFF8FA2B8).withValues(alpha: 0.18),
+        Colors.transparent,
+      ]).createShader(Rect.fromCircle(center: Offset(x + len * 0.4, y), radius: 220))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(Offset(x + len * 0.4, y), 220, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+
+    // Hull — long pointed wedge, point facing left.
+    _p
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const [
+          Color(0xFFBFC6CD),
+          Color(0xFF6E7882),
+          Color(0xFF313840),
+        ],
+      ).createShader(Rect.fromLTWH(x, y - wid * 0.5, len, wid))
+      ..style = PaintingStyle.fill;
+    final hull = Path()
+      ..moveTo(x, y)
+      ..lineTo(x + len * 0.42, y - wid * 0.42)
+      ..lineTo(x + len, y - wid * 0.18)
+      ..lineTo(x + len, y + wid * 0.32)
+      ..lineTo(x + len * 0.42, y + wid * 0.50)
+      ..close();
+    canvas.drawPath(hull, _p);
+    _p.shader = null;
+
+    // Top superstructure — small command tower stack near the rear.
+    _p.color = const Color(0xFF8A949E);
+    canvas.drawRect(Rect.fromLTWH(x + len * 0.78, y - wid * 0.62, 22, 8), _p);
+    canvas.drawRect(Rect.fromLTWH(x + len * 0.82, y - wid * 0.78, 14, 8), _p);
+    // Bridge windows (cool blue specks)
+    _p.color = const Color(0xFF7FD3FF).withValues(alpha: 0.7);
+    canvas.drawRect(Rect.fromLTWH(x + len * 0.82, y - wid * 0.76, 12, 1.2), _p);
+
+    // Hull window strips along the bottom — long row of dotted lights.
+    _p.color = const Color(0xFFFFC56A).withValues(alpha: 0.6);
+    for (var i = 0; i < 22; i++) {
+      final wx = x + len * 0.45 + i * 7.5;
+      if (wx > x + len - 6) break;
+      canvas.drawRect(Rect.fromLTWH(wx, y + wid * 0.20, 1.4, 1.1), _p);
+    }
+
+    // Engine glow at the rear (3 huge thrusters)
+    for (var i = -1; i <= 1; i++) {
+      _glow
+        ..shader = RadialGradient(colors: [
+          const Color(0xFF7FD3FF).withValues(alpha: 0.8),
+          const Color(0xFF26F0F0).withValues(alpha: 0.0),
+        ]).createShader(Rect.fromCircle(center: Offset(x + len + 2, y + i * 8.0), radius: 10))
+        ..blendMode = BlendMode.plus;
+      canvas.drawCircle(Offset(x + len + 2, y + i * 8.0), 10, _glow);
+    }
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+
+    // Dark outline
+    _p
+      ..color = const Color(0xFF14181E)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    canvas.drawPath(hull, _p);
+    _p.style = PaintingStyle.fill;
+
+    // TIE fighter escort dots near the destroyer
+    _p.color = const Color(0xFF2A2F36);
+    for (var i = 0; i < 5; i++) {
+      final tx = x + len * 0.3 + i * 36.0 + sin(world.t * 0.4 + i) * 5;
+      final ty = y - 22 - (i % 2) * 6;
+      canvas.drawCircle(Offset(tx, ty), 1.6, _p);
+    }
+  }
+
+  void _drawFalcon(Canvas canvas, Size s) {
+    final x = world.falconX;
+    final y = world.falconY;
+    if (x < -150 || x > s.width + 200) return;
+
+    // Engine thrust glow (rear is left side since it flies right)
+    _glow
+      ..shader = RadialGradient(colors: [
+        const Color(0xFF7FD3FF).withValues(alpha: 0.85),
+        const Color(0xFF26F0F0).withValues(alpha: 0.0),
+      ]).createShader(Rect.fromCircle(center: Offset(x - 22, y), radius: 18))
+      ..blendMode = BlendMode.plus;
+    canvas.drawCircle(Offset(x - 22, y), 18, _glow);
+    _glow..shader = null..blendMode = BlendMode.srcOver;
+
+    // Main saucer disk
+    _p
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const [
+          Color(0xFFC8CED5),
+          Color(0xFF7B848D),
+          Color(0xFF3A4047),
+        ],
+      ).createShader(Rect.fromLTWH(x - 28, y - 8, 56, 16))
+      ..style = PaintingStyle.fill;
+    canvas.drawOval(Rect.fromLTWH(x - 28, y - 7, 56, 14), _p);
+    _p.shader = null;
+
+    // Forward mandibles (the iconic Y prongs facing right)
+    _p.color = const Color(0xFFA3ABB3);
+    canvas.drawRect(Rect.fromLTWH(x + 16, y - 5, 18, 2.2), _p);
+    canvas.drawRect(Rect.fromLTWH(x + 16, y + 3, 18, 2.2), _p);
+    // Tip of mandibles
+    _p.color = const Color(0xFF5C6168);
+    canvas.drawRect(Rect.fromLTWH(x + 32, y - 5.5, 3, 3.0), _p);
+    canvas.drawRect(Rect.fromLTWH(x + 32, y + 2.5, 3, 3.0), _p);
+
+    // Cockpit pod (off-center to starboard / front-right)
+    _p.color = const Color(0xFF4B5158);
+    canvas.drawRect(Rect.fromLTWH(x + 8, y + 4, 8, 3.2), _p);
+    _p.color = const Color(0xFF7FD3FF).withValues(alpha: 0.85);
+    canvas.drawRect(Rect.fromLTWH(x + 9, y + 4.6, 6, 1.6), _p);
+
+    // Top dish (sensor rectenna)
+    _p.color = const Color(0xFFA3ABB3);
+    canvas.drawRect(Rect.fromLTWH(x - 12, y - 9, 6, 1.6), _p);
+    canvas.drawCircle(Offset(x - 9, y - 11), 2.4, _p);
+
+    // Lower hull shadow
+    _p.color = const Color(0xFF14181E).withValues(alpha: 0.65);
+    canvas.drawOval(Rect.fromLTWH(x - 26, y + 1, 52, 7), _p);
+
+    // Quad-engine glow strip on the rear edge
+    _p.color = const Color(0xFF26F0F0).withValues(alpha: 0.9);
+    canvas.drawRect(Rect.fromLTWH(x - 30, y - 1.2, 4, 2.4), _p);
   }
 
   void _drawDistantPeaks(Canvas canvas, Size s) {
