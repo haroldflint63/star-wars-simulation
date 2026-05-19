@@ -13,6 +13,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../agents/agent_memory.dart';
 import '../api/cohere_client.dart';
 import '../api/swapi_client.dart';
 
@@ -74,6 +75,14 @@ class _CoruscantSceneState extends State<CoruscantScene>
   Timer? _agentTimer;
   int _agentRotor = 0;
 
+  // Smallville-style agent state.
+  final Map<String, MemoryStream> _memories = {};
+  final Map<String, String> _reflections = {};
+  final Map<String, DailyPlan> _plans = {};
+  final Map<String, Map<String, int>> _trustGraph = {};
+  int _turnCount = 0;
+  String _focusAgent = 'Han Solo';
+
   // SWAPI codex
   final _swapi = SwapiClient();
   SwPerson? _focusPerson;
@@ -85,9 +94,56 @@ class _CoruscantSceneState extends State<CoruscantScene>
     super.initState();
     _ticker = createTicker(_onTick)..start();
     _liveAi = _cohere.hasKey;
+    for (final p in _personas) {
+      _memories[p.name] = MemoryStream();
+      _trustGraph[p.name] = {for (final o in _personas) if (o.name != p.name) o.name: 50};
+      // Seed each stream with the agent's identity + goal as importance-9 observations.
+      _memories[p.name]!.add(Memory(
+        kind: MemoryKind.observation,
+        content: 'My name is ${p.name}, ${p.faction}. Long-term goal: ${p.goal}',
+        timestamp: DateTime.now(),
+        importance: 9,
+      ));
+    }
     _scheduleNews();
     _scheduleAgents();
     _loadCodex();
+    _bootstrapPlans();
+  }
+
+  Future<void> _bootstrapPlans() async {
+    final futures = _personas.map((p) async {
+      final slots = await _cohere.dailyPlan(
+        agentName: p.name,
+        faction: p.faction,
+        longTermGoal: p.goal,
+      );
+      return MapEntry(
+        p.name,
+        DailyPlan(
+          agentName: p.name,
+          slots: slots
+              .map((s) => PlanSlot(time: s['time']!, activity: s['activity']!))
+              .toList(),
+        ),
+      );
+    });
+    final results = await Future.wait(futures);
+    if (!mounted) return;
+    setState(() {
+      for (final e in results) {
+        _plans[e.key] = e.value;
+        // Seed plan memories.
+        for (final slot in e.value.slots) {
+          _memories[e.key]!.add(Memory(
+            kind: MemoryKind.plan,
+            content: '${slot.time}: ${slot.activity}',
+            timestamp: DateTime.now(),
+            importance: 6,
+          ));
+        }
+      }
+    });
   }
 
   Future<void> _loadCodex() async {
@@ -131,25 +187,31 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _agentRotor++;
     if (_agentBusy[p.name] == true) return;
     _agentBusy[p.name] = true;
+
     final nearby = _personas.where((o) => o.name != p.name).map((o) => o.name).toList();
     final event = _bulletins.isEmpty ? 'A quiet moment in the upper levels.' : _bulletins.last;
-    final memories = <String>[
-      'You last saw ${nearby.first} arguing with a Czerka rep about credits.',
-      if (nearby.length > 1) 'You owe ${nearby[1]} a favor from the Battle of Scarif.',
-    ];
-    // Pull canonical SWAPI bio for the persona to give Cohere real data.
+
+    // Smallville §4.1.2: retrieve top-N relevant memories for this stimulus.
+    final stream = _memories[p.name]!;
+    final query = '$event ${nearby.join(' ')}';
+    final retrieved = stream
+        .retrieve(query: query, topN: 6)
+        .map((m) => '[${m.kindLabel}] ${m.content}')
+        .toList();
+
     String traits = p.traits;
     if (p.swapiPersonId != null) {
       try {
         final bio = await _swapi.person(p.swapiPersonId!);
-        memories.add(
-          'Canonical SWAPI bio: ${bio.name}, born ${bio.birthYear}, '
-          'homeworld signal traces to ${bio.homeworld.isNotEmpty ? bio.homeworld : 'unknown'}, '
-          'height ${bio.height}cm, mass ${bio.mass}kg, eye color ${bio.eyeColor}.',
+        retrieved.add(
+          '[CANON] ${bio.name}, born ${bio.birthYear}, homeworld '
+          '${bio.homeworld.isNotEmpty ? bio.homeworld : 'unknown'}, '
+          'eyes ${bio.eyeColor}.',
         );
         traits = '${p.traits}. Canon: ${bio.gender}, born ${bio.birthYear}.';
-      } catch (_) {/* ignore, fall back to traits */}
+      } catch (_) {/* ignore */}
     }
+
     final turn = await _cohere.agentTurn(
       agentName: p.name,
       faction: p.faction,
@@ -158,9 +220,70 @@ class _CoruscantSceneState extends State<CoruscantScene>
       currentLocation: 'Outlander Club, Uscru District, Coruscant',
       nearbyCharacters: nearby,
       worldStateContext: event,
-      retrievedMemories: memories,
+      retrievedMemories: retrieved,
     );
     if (!mounted) return;
+
+    // Record this turn into the speaker's stream.
+    final now = DateTime.now();
+    stream.add(Memory(
+      kind: MemoryKind.observation,
+      content: 'I thought: ${turn.innerMonologue}',
+      timestamp: now,
+      importance: 5,
+    ));
+    if (turn.dialogue.isNotEmpty) {
+      stream.add(Memory(
+        kind: MemoryKind.dialogueSelf,
+        content: 'I said to ${turn.socialTarget}: "${turn.dialogue}"',
+        timestamp: now,
+        importance: 6,
+      ));
+      // Smallville-style GOSSIP: nearby agents overhear the dialogue.
+      for (final other in _personas.where((o) => o.name != p.name)) {
+        _memories[other.name]!.add(Memory(
+          kind: MemoryKind.dialogueHeard,
+          content: '${p.name} told ${turn.socialTarget}: "${turn.dialogue}"',
+          timestamp: now,
+          importance: turn.socialTarget == other.name ? 8 : 4,
+        ));
+      }
+    }
+    if (turn.physicalActionType != 'IDLE') {
+      stream.add(Memory(
+        kind: MemoryKind.observation,
+        content: '${turn.physicalActionType}: ${turn.physicalActionDetails}',
+        timestamp: now,
+        importance: 4,
+      ));
+    }
+    // Apply relationship_updates to trust graph.
+    for (final upd in turn.relationshipUpdates) {
+      if (upd.character.isEmpty || upd.character == 'None' || upd.character == 'All') continue;
+      final g = _trustGraph[p.name];
+      if (g != null && g.containsKey(upd.character)) {
+        g[upd.character] = (g[upd.character]! + upd.trustDelta).clamp(0, 100);
+      }
+    }
+
+    _turnCount++;
+    // Smallville §4.1.3: trigger reflection every 5 turns per agent.
+    if (_turnCount % 5 == 0) {
+      final recent = stream.recent(n: 10).map((m) => '[${m.kindLabel}] ${m.content}').toList();
+      _cohere
+          .reflect(agentName: p.name, faction: p.faction, recentMemories: recent)
+          .then((insight) {
+        if (!mounted) return;
+        stream.add(Memory(
+          kind: MemoryKind.reflection,
+          content: insight,
+          timestamp: DateTime.now(),
+          importance: 8,
+        ));
+        setState(() => _reflections[p.name] = insight);
+      });
+    }
+
     setState(() {
       _agentTurns[p.name] = turn;
       _agentBusy[p.name] = false;
@@ -214,6 +337,15 @@ class _CoruscantSceneState extends State<CoruscantScene>
                 personas: _personas,
                 turns: _agentTurns,
                 liveAi: _liveAi,
+              ),
+              _MemoryStreamPanel(
+                focus: _focusAgent,
+                personas: _personas,
+                stream: _memories[_focusAgent],
+                reflection: _reflections[_focusAgent],
+                plan: _plans[_focusAgent],
+                trust: _trustGraph[_focusAgent] ?? const {},
+                onSelect: (n) => setState(() => _focusAgent = n),
               ),
               _NewsTicker(messages: _bulletins, current: _tickerIdx, liveAi: _liveAi),
             ],
@@ -1471,6 +1603,276 @@ class _CodexPanel extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// SMALLVILLE MEMORY STREAM PANEL (bottom-right)
+// =====================================================================
+//
+// Inspired by Park et al., "Generative Agents: Interactive Simulacra of
+// Human Behavior" (Stanford 2023). Shows: focus agent picker, current
+// daily-plan slot, latest reflection, scrolling memory feed colored by
+// kind, and live trust graph.
+
+class _MemoryStreamPanel extends StatelessWidget {
+  const _MemoryStreamPanel({
+    required this.focus,
+    required this.personas,
+    required this.stream,
+    required this.reflection,
+    required this.plan,
+    required this.trust,
+    required this.onSelect,
+  });
+
+  final String focus;
+  final List<_AgentPersona> personas;
+  final MemoryStream? stream;
+  final String? reflection;
+  final DailyPlan? plan;
+  final Map<String, int> trust;
+  final ValueChanged<String> onSelect;
+
+  Color _kindColor(MemoryKind k) {
+    switch (k) {
+      case MemoryKind.reflection:
+        return const Color(0xFF7C5CFF);
+      case MemoryKind.dialogueSelf:
+        return const Color(0xFF26F0F0);
+      case MemoryKind.dialogueHeard:
+        return const Color(0xFFFFB347);
+      case MemoryKind.plan:
+        return const Color(0xFF00D4A8);
+      case MemoryKind.observation:
+        return const Color(0xFFA8AEBD);
+    }
+  }
+
+  PlanSlot? _currentSlot() {
+    if (plan == null || plan!.slots.isEmpty) return null;
+    final hhmm = DateTime.now();
+    final nowKey = '${hhmm.hour.toString().padLeft(2, '0')}${hhmm.minute.toString().padLeft(2, '0')}';
+    PlanSlot? cur;
+    for (final s in plan!.slots) {
+      if (s.time.compareTo(nowKey) <= 0) cur = s;
+    }
+    return cur ?? plan!.slots.first;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final memories = stream?.all ?? const <Memory>[];
+    final slot = _currentSlot();
+    final focusColor = personas.firstWhere(
+      (p) => p.name == focus,
+      orElse: () => personas.first,
+    ).color;
+
+    return Positioned(
+      right: 16,
+      bottom: 110,
+      width: 380,
+      child: _GlassCard(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(color: focusColor, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'SMALLVILLE \u00b7 MEMORY STREAM',
+                      style: TextStyle(
+                        color: Color(0xFF7C5CFF),
+                        fontSize: 10,
+                        letterSpacing: 1.4,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${memories.length} mem',
+                    style: const TextStyle(color: Color(0xFF6B7184), fontSize: 9),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Persona picker
+              Row(
+                children: personas.map((p) {
+                  final sel = p.name == focus;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: GestureDetector(
+                      onTap: () => onSelect(p.name),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: sel ? p.color.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: p.color.withValues(alpha: sel ? 0.9 : 0.3),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          p.name.split(' ').first,
+                          style: TextStyle(
+                            color: sel ? Colors.white : const Color(0xFFB8C4D4),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 10),
+              if (slot != null)
+                _strip(
+                  'NOW \u00b7 ${slot.time}',
+                  slot.activity,
+                  const Color(0xFF00D4A8),
+                ),
+              if (reflection != null) ...[
+                const SizedBox(height: 6),
+                _strip('REFLECTION', reflection!, const Color(0xFF7C5CFF)),
+              ],
+              if (trust.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: trust.entries.map((e) {
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${e.key.split(' ').first} ${e.value}',
+                              style: const TextStyle(color: Color(0xFFB8C4D4), fontSize: 9),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(2),
+                              child: LinearProgressIndicator(
+                                value: e.value / 100.0,
+                                minHeight: 3,
+                                backgroundColor: Colors.white.withValues(alpha: 0.06),
+                                valueColor: AlwaysStoppedAnimation(
+                                  e.value >= 50 ? const Color(0xFF00D4A8) : const Color(0xFFFF5C7A),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 180),
+                child: memories.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 18),
+                        child: Text(
+                          'Memory stream initialising\u2026',
+                          style: TextStyle(color: Color(0xFF6B7184), fontSize: 11),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount: memories.length.clamp(0, 14),
+                        itemBuilder: (ctx, i) {
+                          final m = memories[i];
+                          final c = _kindColor(m.kind);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  margin: const EdgeInsets.only(top: 3, right: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: c.withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(3),
+                                    border: Border.all(color: c.withValues(alpha: 0.5), width: 0.6),
+                                  ),
+                                  child: Text(
+                                    m.kindLabel,
+                                    style: TextStyle(color: c, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    m.content,
+                                    style: const TextStyle(
+                                      color: Color(0xFFE6EAF2),
+                                      fontSize: 10.5,
+                                      height: 1.3,
+                                    ),
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 4, top: 2),
+                                  child: Text(
+                                    'i${m.importance}',
+                                    style: const TextStyle(color: Color(0xFF6B7184), fontSize: 8),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _strip(String label, String body, Color c) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: c.withValues(alpha: 0.4), width: 0.7),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(color: c, fontSize: 9, letterSpacing: 1.1, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            body,
+            style: const TextStyle(color: Colors.white, fontSize: 11, height: 1.3),
+          ),
         ],
       ),
     );

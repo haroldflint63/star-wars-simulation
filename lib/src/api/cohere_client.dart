@@ -238,6 +238,124 @@ Respond ONLY with a single JSON object matching this schema. No prose, no code f
     return pool[_rand.nextInt(pool.length)];
   }
 
+  // ===== Smallville reflection =======================================
+
+  /// Synthesise a single high-level insight from a list of recent memories.
+  /// Mirrors Park et al. §4.1.3 — the "reflection tree" trigger.
+  Future<String> reflect({
+    required String agentName,
+    required String faction,
+    required List<String> recentMemories,
+  }) async {
+    if (!hasKey || recentMemories.isEmpty) {
+      return _fallbackReflection(agentName);
+    }
+    final mem = recentMemories.map((m) => '- $m').join('\n');
+    final prompt =
+        'You are $agentName, $faction operative in the Star Wars universe. '
+        'Given these recent memories, write ONE high-level reflection '
+        '(insight, lesson learned, suspicion, or evolving relationship belief). '
+        'First person, in-character, max 140 chars, no preamble, no quotes.\n\n'
+        'MEMORIES:\n$mem';
+    try {
+      final res = await http
+          .post(
+            Uri.parse(_endpoint),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'model': _model,
+              'message': prompt,
+              'temperature': 0.8,
+              'max_tokens': 120,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode >= 400) return _fallbackReflection(agentName);
+      final json = jsonDecode(res.body) as Map<String, dynamic>;
+      final text = (json['text'] as String?)?.trim() ?? '';
+      if (text.isEmpty) return _fallbackReflection(agentName);
+      return text.replaceAll('"', '').split('\n').first.trim();
+    } catch (e) {
+      debugPrint('Cohere reflect error: $e');
+      return _fallbackReflection(agentName);
+    }
+  }
+
+  String _fallbackReflection(String name) {
+    final pool = [
+      'I trust no one in this district until the credits clear.',
+      'The Empire watches lane 41 — I must reroute the next handoff.',
+      'My oldest debts always come due at the worst moment.',
+      'Diplomacy buys time; blasters buy escape. Tonight needs both.',
+      'Every cantina rumour is half a lie and half a job offer.',
+    ];
+    return pool[_rand.nextInt(pool.length)];
+  }
+
+  /// Generate a 6-slot daily plan for an agent (Smallville §4.2).
+  Future<List<Map<String, String>>> dailyPlan({
+    required String agentName,
+    required String faction,
+    required String longTermGoal,
+  }) async {
+    if (!hasKey) return _fallbackPlan();
+    final prompt =
+        'You are $agentName ($faction). Your long-term goal: $longTermGoal. '
+        'Generate a 6-slot daily plan for today on Coruscant. '
+        'Respond ONLY with a JSON object: '
+        '{"slots":[{"time":"HHMM","activity":"string"}]}. '
+        'Times: 0700, 1000, 1300, 1600, 1900, 2200. Activities <= 80 chars, '
+        'in-character, Star Wars terminology only.';
+    try {
+      final res = await http
+          .post(
+            Uri.parse(_endpoint),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'model': _model,
+              'message': prompt,
+              'temperature': 0.8,
+              'max_tokens': 400,
+              'response_format': {'type': 'json_object'},
+            }),
+          )
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode >= 400) return _fallbackPlan();
+      final outer = jsonDecode(res.body) as Map<String, dynamic>;
+      final raw = _stripCodeFences((outer['text'] as String?)?.trim() ?? '');
+      final parsed = jsonDecode(raw) as Map<String, dynamic>;
+      final slots = (parsed['slots'] as List?) ?? const [];
+      final list = slots
+          .whereType<Map>()
+          .map((e) => {
+                'time': (e['time'] as String?)?.trim() ?? '',
+                'activity': (e['activity'] as String?)?.trim() ?? '',
+              })
+          .where((e) => e['time']!.isNotEmpty && e['activity']!.isNotEmpty)
+          .toList();
+      if (list.isEmpty) return _fallbackPlan();
+      return list;
+    } catch (e) {
+      debugPrint('Cohere dailyPlan error: $e');
+      return _fallbackPlan();
+    }
+  }
+
+  List<Map<String, String>> _fallbackPlan() => const [
+        {'time': '0700', 'activity': 'Sweep the safehouse for surveillance bugs.'},
+        {'time': '1000', 'activity': 'Meet a contact at Dex\'s Diner on level 1313.'},
+        {'time': '1300', 'activity': 'Refuel and recalibrate ship at Westport hangar 12.'},
+        {'time': '1600', 'activity': 'Attend a sabacc game at the Outlander Club.'},
+        {'time': '1900', 'activity': 'Encrypted holocall with off-world handler.'},
+        {'time': '2200', 'activity': 'Patrol Uscru rooftops — verify dead-drop sites.'},
+      ];
+
   // ===== News fallback ===============================================
 
   String _fallback() => _canned[_rand.nextInt(_canned.length)];
