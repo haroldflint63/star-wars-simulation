@@ -23,6 +23,8 @@ class CohereClient {
   /// Global cinematic-simulation directive prepended to every generative
   /// call (agent turns, reflections, news). Establishes lore-grounded,
   /// AAA-quality, memory-aware Star Wars roleplay.
+  static const simulationSystemDirective = _simulationSystemDirective;
+
   static const _simulationSystemDirective = '''
 SYSTEM ROLE — STAR WARS SIMULATION ENGINE
 

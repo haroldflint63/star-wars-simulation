@@ -15,8 +15,14 @@ import 'package:flutter/scheduler.dart';
 
 import '../agents/agent_memory.dart';
 import '../api/cohere_client.dart';
+import '../api/embeddings_client.dart';
+import '../api/event_generator.dart';
+import '../api/groq_client.dart';
+import '../api/nasa_api.dart';
 import '../api/swapi_client.dart';
+import '../api/wookiee_client.dart';
 import '../audio/star_wars_sounds.dart';
+import 'package:http/http.dart' as http;
 
 class CoruscantScene extends StatefulWidget {
   const CoruscantScene({super.key});
@@ -93,6 +99,18 @@ class _CoruscantSceneState extends State<CoruscantScene>
   Timer? _codexTimer;
   int _codexRotor = 0;
 
+  // New integrations: Wookieepedia lore, NASA APOD sky, Groq dialogue,
+  // event generator, Cohere embeddings RAG memory.
+  final _wookiee = WookieeClient();
+  final _groq = GroqClient();
+  final _embeddings = EmbeddingsClient();
+  late final _eventGen = EventGenerator(cohere: _cohere, groq: _groq);
+  final Map<String, EmbeddingMemoryStore> _embStore = {};
+  final Map<String, String> _wookieeLore = {};
+  Timer? _eventTimer;
+  String _worldEvent = 'A quiet moment in the upper levels of Coruscant.';
+  String _apodTitle = '';
+
   @override
   void initState() {
     super.initState();
@@ -100,6 +118,7 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _liveAi = _cohere.hasKey;
     for (final p in _personas) {
       _memories[p.name] = MemoryStream();
+      _embStore[p.name] = EmbeddingMemoryStore();
       _trustGraph[p.name] = {for (final o in _personas) if (o.name != p.name) o.name: 50};
       // Seed each stream with the agent's identity + goal as importance-9 observations.
       _memories[p.name]!.add(Memory(
@@ -111,7 +130,10 @@ class _CoruscantSceneState extends State<CoruscantScene>
     }
     _scheduleNews();
     _scheduleAgents();
+    _scheduleEvents();
     _loadCodex();
+    _loadApodSky();
+    _prefetchWookieeLore();
     _bootstrapPlans();
     // Free ambient space sound (freesound.org CDN, no key required).
     StarWarsSounds.playAmbientSpace();
@@ -152,6 +174,79 @@ class _CoruscantSceneState extends State<CoruscantScene>
         }
       }
     });
+  }
+
+  // --- NEW: APOD sky, Wookieepedia lore prefetch, event generator, RAG ---
+
+  Future<void> _loadApodSky() async {
+    try {
+      final apod = await NasaApi.getApod();
+      if (apod == null || apod.url.isEmpty || apod.mediaType != 'image') return;
+      final res = await http
+          .get(Uri.parse(apod.url))
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode >= 400) return;
+      final codec = await ui.instantiateImageCodec(res.bodyBytes);
+      final frame = await codec.getNextFrame();
+      if (!mounted) return;
+      setState(() {
+        _world.apodImage = frame.image;
+        _apodTitle = apod.title;
+      });
+    } catch (_) {/* keep procedural sky */}
+  }
+
+  Future<void> _prefetchWookieeLore() async {
+    final futures = _personas.map((p) async {
+      final lore = await _wookiee.summary(p.name);
+      if (lore.isEmpty) return;
+      _wookieeLore[p.name] = lore;
+      _memories[p.name]?.add(Memory(
+        kind: MemoryKind.observation,
+        content: '[WOOKIEEPEDIA] $lore',
+        timestamp: DateTime.now(),
+        importance: 9,
+      ));
+      if (_embeddings.hasKey) {
+        final vec = await _embeddings.embedOne(lore,
+            inputType: 'search_document');
+        if (vec != null) _embStore[p.name]?.add('[CANON] $lore', vec);
+      }
+    });
+    await Future.wait(futures);
+  }
+
+  void _scheduleEvents() {
+    Timer.run(_fireWorldEvent);
+    _eventTimer = Timer.periodic(
+        const Duration(seconds: 18), (_) => _fireWorldEvent());
+  }
+
+  Future<void> _fireWorldEvent() async {
+    final ev = await _eventGen.nextEvent();
+    if (!mounted || ev.isEmpty) return;
+    setState(() {
+      _worldEvent = ev;
+      _bulletins.add('[GALAXY EVENT] $ev');
+      if (_bulletins.length > 12) _bulletins.removeAt(0);
+      _tickerIdx = _bulletins.length - 1;
+    });
+  }
+
+  Future<void> _embedAndStore(String agentName, String text) async {
+    if (!_embeddings.hasKey || text.isEmpty) return;
+    final vec = await _embeddings.embedOne(text, inputType: 'search_document');
+    if (vec != null) _embStore[agentName]?.add(text, vec);
+  }
+
+  Future<List<String>> _retrieveEmbedded(String agentName, String query,
+      {int k = 4}) async {
+    if (!_embeddings.hasKey) return const [];
+    final store = _embStore[agentName];
+    if (store == null || store.length == 0) return const [];
+    final qv = await _embeddings.embedOne(query, inputType: 'search_query');
+    if (qv == null) return const [];
+    return store.topK(qv, k);
   }
 
   Future<void> _loadCodex() async {
@@ -229,7 +324,9 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _agentBusy[p.name] = true;
 
     final nearby = _personas.where((o) => o.name != p.name).map((o) => o.name).toList();
-    final event = _bulletins.isEmpty ? 'A quiet moment in the upper levels.' : _bulletins.last;
+    final event = _worldEvent.isNotEmpty
+        ? _worldEvent
+        : (_bulletins.isEmpty ? 'A quiet moment in the upper levels.' : _bulletins.last);
 
     // Smallville §4.1.2: retrieve top-N relevant memories for this stimulus.
     final stream = _memories[p.name]!;
@@ -238,6 +335,18 @@ class _CoruscantSceneState extends State<CoruscantScene>
         .retrieve(query: query, topN: 6)
         .map((m) => '[${m.kindLabel}] ${m.content}')
         .toList();
+
+    // RAG: also pull top-K by Cohere embedding cosine similarity.
+    final ragHits = await _retrieveEmbedded(p.name, query, k: 4);
+    for (final r in ragHits) {
+      retrieved.add('[RAG] $r');
+    }
+
+    // Wookieepedia canonical lore (cached after first fetch).
+    final lore = _wookieeLore[p.name];
+    if (lore != null && lore.isNotEmpty) {
+      retrieved.add('[WOOKIEEPEDIA] $lore');
+    }
 
     String traits = p.traits;
     if (p.swapiPersonId != null) {
@@ -252,7 +361,19 @@ class _CoruscantSceneState extends State<CoruscantScene>
       } catch (_) {/* ignore */}
     }
 
-    final turn = await _cohere.agentTurn(
+    // Prefer Groq for ultra-fast dialogue; fall back to Cohere on miss.
+    AgentTurn? turn = await _groq.agentTurn(
+      systemDirective: CohereClient.simulationSystemDirective,
+      agentName: p.name,
+      faction: p.faction,
+      traits: traits,
+      longTermGoal: p.goal,
+      currentLocation: 'Outlander Club, Uscru District, Coruscant',
+      nearbyCharacters: nearby,
+      worldStateContext: event,
+      retrievedMemories: retrieved,
+    );
+    turn ??= await _cohere.agentTurn(
       agentName: p.name,
       faction: p.faction,
       traits: traits,
@@ -307,6 +428,18 @@ class _CoruscantSceneState extends State<CoruscantScene>
     }
 
     _turnCount++;
+    // Embed this turn (monologue + dialogue) into Cohere RAG store for
+    // long-term semantic recall.
+    final ragText = [
+      if (turn.innerMonologue.isNotEmpty) 'thought: ${turn.innerMonologue}',
+      if (turn.dialogue.isNotEmpty) 'said to ${turn.socialTarget}: ${turn.dialogue}',
+      if (turn.physicalActionType != 'IDLE')
+        '${turn.physicalActionType}: ${turn.physicalActionDetails}',
+    ].join(' | ');
+    if (ragText.isNotEmpty) {
+      // Fire and forget — non-blocking.
+      _embedAndStore(p.name, ragText);
+    }
     // Smallville §4.1.3: trigger reflection every 5 turns per agent.
     if (_turnCount % 5 == 0) {
       final recent = stream.recent(n: 10).map((m) => '[${m.kindLabel}] ${m.content}').toList();
@@ -354,6 +487,7 @@ class _CoruscantSceneState extends State<CoruscantScene>
     _newsTimer?.cancel();
     _agentTimer?.cancel();
     _codexTimer?.cancel();
+    _eventTimer?.cancel();
     super.dispose();
   }
 
@@ -443,6 +577,10 @@ class _World {
 
   // Star Destroyer slow drift (parallax background)
   double destroyerX = 0;
+
+  // NASA APOD nebula backdrop. When non-null, the painter blends it into
+  // the upper portion of the sky for a live deep-space layer.
+  ui.Image? apodImage;
 
   void ensureSized(double width, double height) {
     if (width <= 0 || height <= 0) return;
@@ -2617,6 +2755,26 @@ class _BoganoPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
     canvas.drawRect(rect, _p);
     _p.shader = null;
+
+    // NASA APOD nebula backdrop — blended into the upper sky band when
+    // loaded. Gives the scene a live deep-space layer that changes daily.
+    final apod = world.apodImage;
+    if (apod != null) {
+      final dst = Rect.fromLTWH(0, 0, s.width, s.height * 0.55);
+      final src = Rect.fromLTWH(
+          0, 0, apod.width.toDouble(), apod.height.toDouble());
+      canvas.saveLayer(dst, Paint());
+      canvas.drawImageRect(
+        apod,
+        src,
+        dst,
+        Paint()
+          ..blendMode = BlendMode.plus
+          ..colorFilter = const ColorFilter.mode(
+              Color(0x99FFFFFF), BlendMode.modulate),
+      );
+      canvas.restore();
+    }
 
     // Soft purple nebula clouds in upper sky
     for (var i = 0; i < 4; i++) {
